@@ -1,0 +1,240 @@
+개요
+ㄴ 타겟 이미지를 스캔하여 활성화 된 오브젝트를 사람이 직접 컨트롤 하기 위해 만들어진 스크립트
+ㄴ 확대/축소, 회전에 사용됨
+ㄴ 첫 터치 시 ARCamera에 고정 시키고
+ㄴ 두번 터치시 Phonics 기능으로 넘기며
+ㄴ 회전시 손가락 방향에 맞게 회전, 확대 축소시 최소/최대값을 넘지 않는 선에서 스케일을 조절한다
+
+===================================================================================
+
+1. 변수
+canvasManager(CanvasManager)		//CanvasManager 클래스
+prefabLoader(PrefabLoader)			//PrefabLoader 클래스
+onTargetScale(float)				//타겟 스케일
+objectScale(float)				//오브젝트 스케일
+maxScale(float)				//최대 스케일
+minScale(float)				//최소 스케일
+mTrackableBehaviour(Trackablebehaviour)	//TrackableBehaviour 클래스
+targetName(string)				//타겟 이름
+isFreeModel(bool)				//프리모델 확인용
+counter = 0(int)				//???
+
+===================================================================================
+
+2. void Start()
+    {
+        //각 항목에 대한 선언을 해 준다
+        prefabLoader = FindObjectOfType<PrefabLoader>();
+        canvasManager = FindObjectOfType<CanvasManager>();
+        //onTargetScale의 값을 이 오브젝트의 스케일의 x값으로 선언한다
+        onTargetScale = transform.localScale.x;
+    }
+
+===================================================================================
+
+3.     private void OnDestroy()		//해당 오브젝트가 없어지게 될 때 남아있는 정보를 지우기 위한 함수
+    {
+        Destroy(this.gameObject);
+    }
+
+===================================================================================
+
+//활성화 되거나 활성화 되지 않았을 때 해당 값들을 더하거나 뺀다. (탭 횟수, 스케일, 회전 등)
+
+4. void OnEnable()
+    {
+        if (GetComponent<TapGesture>() != null)
+        {
+            GetComponent<TapGesture>().Tapped += TappedHandler;
+        }
+
+        if (GetComponent<ScaleGesture>() != null)
+        {
+            GetComponent<ScaleGesture>().StateChanged += OnScaleStateChanged;
+        }
+
+        if (GetComponent<PanGesture>() != null)
+        {
+            GetComponent<PanGesture>().StateChanged += OnPanStateChanged;
+        }
+
+    }
+
+4-1. void OnDisable()
+    {
+        if (GetComponent<TapGesture>() != null)
+        {
+            GetComponent<TapGesture>().Tapped -= TappedHandler;
+        }
+        if (GetComponent<ScaleGesture>() != null)
+        {
+            GetComponent<ScaleGesture>().StateChanged -= OnScaleStateChanged;
+        }
+        if (GetComponent<PanGesture>() != null)
+        {
+            GetComponent<PanGesture>().StateChanged -= OnPanStateChanged;
+        }
+    }
+
+===================================================================================
+
+5. void TappedHandler(object sender, EventArgs e)		//탭 이벤트에 대한 리스너
+    {
+
+#if UNITY_IPHONE && !UNITY_EDITOR
+			goToStudyViewController (obj_name);		//애플 유저의 경우 해당 함수를 실행 (단, 현재 함수의 존재 유무가 확인되지 않음)
+#endif
+        //counter의 숫자를 1 추가
+        counter++;
+
+        //counter의 숫자가 1일 경우
+        if (counter == 1)
+           //DoubleTapEvent 함수를 코루틴으로 실행
+            StartCoroutine(DoubleTapEvent());
+    }
+
+===================================================================================
+
+// 터치→ 오브젝트 타겟 분리, 더블탭→ 파닉스전환
+6. IEnumerator DoubleTapEvent()		
+    {
+        우선 0.5초 기다렸다 리턴
+        yield return new WaitForSeconds(0.5f);
+        //counter가 1을 초과했을 경우 (더블탭으로 파닉스 전환)
+        if (counter > 1)
+        {
+            //0.02초 기다렸다 리턴
+            yield return new WaitForSeconds(0.02f);
+
+            //camera changer
+            ARManager.Instance.ChangeCamera("MainCamera");		//카메라 변환 (메인 카메라 -> 파닉스용 카메라)
+            ARManager.Instance.setHintZero();			//오브젝트 트래커를 멈춤
+
+            //prefabLoader의 ChangePrefab 함수를 targetName과 isFreeModel을 넣어 실행
+            prefabLoader.ChangePrefab(targetName, isFreeModel);
+
+            //canvasManager의 OnPhonicsPanel 함수를 참을 넣어 실행(파닉스 패널 활성화)
+            canvasManager.OnPhonicsPanel(true);
+        }
+        //counter가 1을 초과하지 않았을 경우 (터치하여 오브젝트 타겟을 분리)
+        else
+        {
+            //prefabLoader의 TargetOffMoving 함수에 gameObject를 넣어 실행
+            prefabLoader.TargetOffMoving(gameObject);
+            //canvasManager의 OnTargetOffObject 함수에 참을 넣어 실행
+            canvasManager.OnTargetOffObject(true);
+            //mTrackableBehaviour의 OnTrackerUpdate 함수에 TrackableBehaviour.Status.NOT_FOUND를 넣어 실행(== 타겟 찾지 않음으로)
+            mTrackableBehaviour.OnTrackerUpdate(TrackableBehaviour.Status.NOT_FOUND);
+        }
+        //0.05초 기다렸다 리턴
+        yield return new WaitForSeconds(0.05f);
+        //prefabLoader의 ModelFalse 함수 실행
+        prefabLoader.ModelFalse();
+
+        //counter의 값을 0으로
+        counter = 0;
+    }
+
+===================================================================================
+
+7. void OnPanStateChanged(object sender, GestureStateChangeEventArgs e)
+    {
+        //if (!Enabled)
+        //{
+        //    return;
+        //}
+
+        //e의 State값에 따라 사용하는 방법을 나눔
+        switch (e.State)
+        {
+            //e의 값이 Gesture.GestureState.Began 혹은 Gesture.GestureState.Changed일 때(== 타겟을 잡았거나 타겟이 바뀌었을 때)
+            case Gesture.GestureState.Began:
+            case Gesture.GestureState.Changed:
+                //아무개 gesture는 sender를 PanGesture로 강제 형변환 한 것으로 선언
+                var gesture = (PanGesture)sender;
+
+                //2nd attempt
+                //gesture의 월드 델타 포지션이 Vector3.zero(0,0,0)이 아닐 경우
+                if (gesture.WorldDeltaPosition != Vector3.zero)
+                {
+                    //gesture의 WorldDeltaPosition의 x가 WorldDeltaPosition의 z보다 클 경우
+                    if (Math.Abs(gesture.WorldDeltaPosition.x) > Math.Abs(gesture.WorldDeltaPosition.z))
+                    {//horizontal
+                        //이 오브젝트의 로테이션을 아래와 같이 정한다
+                        transform.Rotate(0, 0, -gesture.WorldDeltaPosition.x * 1.3f, Space.World);
+                    }
+                    //gesture의 WorldDeltaPosition의 x가 WorldDeltaPosition의 z보다 작거나 같을 경우
+                    else
+                    {
+                        //이 오브젝트의 로테이션을 아래와 같이 정한다
+                        transform.Rotate(gesture.WorldDeltaPosition.z * 1.3f, 0, 0, Space.World);
+                    }
+                }
+
+                break;
+        }
+    }
+
+===================================================================================
+
+8. void OnScaleStateChanged(object sender, GestureStateChangeEventArgs e)
+    {
+        //if (!Enabled)
+        //{
+        //    return;
+        //}
+        float scaleSpeed;
+
+        //prefabLoader의 isTargetoff가 참일 경우
+        if (prefabLoader.isTargetoff)
+        {
+            //변수들을 아래와 같이 설정
+            objectScale = 1;
+            scaleSpeed = 0.05f;
+            minScale = 50f;
+            maxScale = 250f;
+        }
+        //prefabLoader의 isTargetoff가 거짓일 경우
+        else
+        {
+            //변수들을 아래와 같이 설정
+            objectScale = onTargetScale;
+            scaleSpeed = 1.5f;
+            minScale = 0.05f;
+            maxScale = 2.0f;
+        }
+
+        //e의 State값에 따라 사용하는 방법을 나눔
+        switch (e.State)
+        {
+            //e의 State가 Gesture.GestureState.Began 혹은 Gesture.GestureState.Changed일 경우
+            case Gesture.GestureState.Began:
+            case Gesture.GestureState.Changed:
+
+                //아무개 gesture는 sender를 ScaleGesture로 강제 형변환 하여 선언
+                var gesture = (ScaleGesture)sender;
+
+                //localDeltaScale를 gesture의 LocaldeltaScale로 설정
+                float localDeltaScale = gesture.LocalDeltaScale;
+                //float objectScale = transform.localScale.x;
+
+                //scaling
+                //currentScale를 이 오브젝트의 transform의 localScale의 x값으로 선언
+                float currentScale = transform.localScale.x;
+                //localDeltaScale의 값이 1.0보다 크거나 같을 경우 currentScale의 값을 아래와 같이 한다
+                if (localDeltaScale >= 1f)
+                    currentScale *= (1 + (objectScale * scaleSpeed));
+                //localDeltaScale의 값이 1.0보다 작을 경우 currentScale의 값을 아래와 같이 한다
+                else
+                    currentScale *= (1 - (objectScale * scaleSpeed));
+
+                //currentScale의 값을 minScale미만이거나 maxScale초과 되지 않는 값으로 하여
+                currentScale = Mathf.Clamp(currentScale, minScale, maxScale);
+                //이 오브젝트의 loaclScale을 아래와 같이 선언한다
+                transform.localScale = new Vector3(currentScale, currentScale, currentScale);
+
+
+
+                break;
+        }
+    }

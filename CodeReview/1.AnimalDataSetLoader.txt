@@ -1,0 +1,307 @@
+개요
+ㄴ 오브젝트를 하이라키에서 손으로 다는 것이 아닌, 스크립트로 제어하기 위한 스크립트(오브젝트가 수백개가 되기 때문에 손으로 다는것은 귀찮은 작업)
+ㄴ Splash Scene이 동작 중일 때 기동 되는 것으로 추정
+ㄴ 400개의 타겟과 오브젝트를 100개 단위로 끊어 하나의 오브젝트에 담아 해당 값들을 저장한다.
+ㄴ 작업이 다 끝난다면 로딩화면을 없애고 메인화면으로 이동하게 된다.
+
+===================================================================================
+
+1. 변수
+progressBar(UnityEngine.UI.Image)		//로딩창용 이미지
+progressText(Text)				//로딩창용 텍스트
+arCam(GameObject)			//Vuforia용 카메라
+dataSetName(string)			// Assets/StreamingAssets/QCAR/DataSetName
+fileExist=false(bool)				//file Exist Check
+dataSetNumber=1(int)			//책 넘버
+tagmeDataSets(List<string>)			//로컬파일로 다운받은 데이터셋 이름(모두 소문자)
+tagmeTargets(List<string>)			//전체 타겟 이름(모두 소문자)
+freePage(string[])				//맛보기 페이지용 이름들
+audioFolder(string[])			//오디오용 변수
+canvasManager(CanvasManager)		//캔버스 매니저 클래스
+prefabShelter(PrefabShelter)			//프리팹 임시 저장 클래스
+
+===================================================================================
+
+2. void Awake()
+    {
+	//Vuforia의 지연 초기화를 하지 않음
+	VuforiaAbstractConfiguration.Instance.Vuforia.DelayedInitialization = false;
+	//Vuforia 카메라를 활성화시킨다(== Vuforia 카메라의 권한을 획득한다)
+	arCam.GetComponent<VuforiaBehaviour>().enabled = true;
+	//Vuforia를 클론으로 생성한다
+	VuforiaRuntime.Instance.InitVuforia();
+	
+	//캔버스 매니저를 찾아서 달아준다
+	canvasManager = FindObjectOfType<CanvasManager>();
+	//프리팹 임시 저장소를 찾아서 달아준다
+	prefabShelter = FindObjectOfType<PrefabShelter>();
+
+	//tagmeTargets와 tagmeDataSets를 초기화 해준다
+	tagmeTargets = new List<string>();
+	tagmeDataSets = new List<string>();
+
+	//dataSetName을 아래와 같이 선언해 준다
+	dataSetName = string.Format("TagMe3D_New_Book{0}", dataSetNumber);
+
+	//Vuforia ver.6.2 (Vuforia 6.2 버전 부터는 아래의 함수를 사용해야만함)
+	VuforiaARController.Instance.RegisterVuforiaStartedCallback(LoadDataSet);
+    }
+
+===================================================================================
+
+3. void LoadDataSet()
+    {
+	//objectTracker 를 선언한다
+	ObjectTracker objectTracker = TrackerManager.Instance.GetTracker<ObjectTracker>();
+
+	//dataSetName를 아래와 같이 선언해 준다
+	dataSetName = string.Format("TagMe3D_New_Book{0}", dataSetNumber);
+	//dataSet의 값을 변경
+	DataSet dataSet = objectTracker.CreateDataSet();
+
+	//dataSet이 dataSetName를 가지고 Load 되면
+	if (dataSet.Load(dataSetName))
+	{
+		//objectTracker가 dataSet를 활성화 시키지 못했을 경우
+		if (!objectTracker.ActivateDataSet(dataSet))
+            	{
+                		// Note: ImageTracker cannot have more than 1000 total targets activated	(데이타셋을 불러오지 못했다고 로그를 남김)
+                		Debug.Log("<color=yellow>Failed to Activate DataSet: " + (dataSetName) + "</color>");
+            	}
+		
+		//objectTracker가 시작을 하지 못했을 경우
+            	if (!objectTracker.Start())
+            	{
+			//트래커가 실행하지 못했다고 로그를 남김
+                		Debug.Log("<color=yellow>Tracker Failed to Start.</color>");
+            	}
+
+		//CheckFile 함수에 dataSetName과 objectTracker를 넣어 코루틴으로 실행함
+            	StartCoroutine(CheckFile(dataSetName, objectTracker));
+		//위 코루틴이 끝나면 objectTracker는 작동을 멈춤
+            	objectTracker.Stop();
+        	}
+	//dataSet이 dataSetName를 가지고 Load 되지 않았다면
+        	else
+        	{	
+		//데이타셋이 로드 되지 않았다고 로그를 남김
+            	Debug.LogError("<color=yellow>Failed to load dataset: '" + (dataSetName) + "'</color>");
+        	}
+    }
+
+===================================================================================
+
+4.IEnumerator CheckFile(string dataSetName, ObjectTracker objectTracker)
+    {
+	//GameObject인 temp는 데이타셋의 이름을 가진 오브젝트를 찾음
+	GameObject temp = transform.Find(dataSetName).gameObject;
+	//(미파악)
+	IEnumerable<TrackableBehaviour> tbs = TrackerManager.Instance.GetStateManager().GetTrackableBehaviours();
+
+  //foreach문을 돌려 tbs에 tb가 포함되지 않을 때 까지 돌림
+  foreach (TrackableBehaviour tb in tbs)
+        {
+            //tb의 이름이 New Game Object와 같다면
+            if (tb.name.Equals("New Game Object"))
+            {
+                //tb의 이름을 tb.TrackableName의 값과 동일하게 함
+                tb.gameObject.name = tb.TrackableName;
+
+                //tb의 TrackableName을 가진 오브젝트가 cover에 담겨 있다면
+                if (tb.TrackableName.Contains("cover"))
+                {
+                    //tb의 부모의 트랜스폼을 변경 후 CoverTrackerbleEventHandler 컴포넌트를 추가함
+                    tb.gameObject.transform.parent = transform;
+                    tb.gameObject.AddComponent<CoverTrackerbleEventHandler>();
+                }
+                //tb의 TrackableName을 가진 오브젝트가 cover에 담겨 있지 않다면
+                else
+                {
+                    //checkfree의 값을 거짓으로
+                    bool checkfree = false;
+
+                    //tb의 부모의 트랜스폼을 temp의 트랜스폼으로 변경후 tb에 DynamicTrackableEventHandler 컴포넌트를 달아준다
+                    tb.gameObject.transform.parent = temp.transform;
+                    DynamicTrackableEventHandler dteh = tb.gameObject.AddComponent<DynamicTrackableEventHandler>();
+
+                    //freePage의 길이만큼 반복
+                    for (int i = 0; i < freePage.Length; i++)
+                    {
+                        //i번째 freePage가 tb의 TrackableName와 같다면
+                        if (freePage[i].Equals(tb.TrackableName))
+                        {
+                            //checkfree의 값을 참으로 하고 반복문을 종료
+                            checkfree = true;
+                            break;
+                        }
+                    }
+                    //dteh의 isFreeModel의 값을 checkfree와 같게 한다
+                    dteh.isFreeModel = checkfree;
+
+                    //checkfree가 참이라면 tagmeTargets에 string.Empty를 추가
+                    //거짓이라면 tagmeTarget에 tb.TrackableName.ToLower를 추가
+                    if (checkfree)
+                        tagmeTargets.Add(string.Empty);
+                    else
+                        tagmeTargets.Add(tb.TrackableName.ToLower());
+                }
+            }
+        }
+        //프레임이 끝날때 까지 기다렸다 리턴해준다
+        yield return new WaitForEndOfFrame();
+
+        //check와 assetCheck의 값을 참으로 선언, checks를 100개 배열로 모두 참으로 선언
+        bool check = true;
+        bool assetCheck = true;
+        bool[] checks = new bool[100];
+
+        for (int i = 0; i < checks.Length; i++)
+        {
+            checks[i] = true;
+        }
+
+        //assetCheck의 값은 아래의 파일이 존재 한다면 참, 존재하지 않으면 거짓으로 선언
+        assetCheck = File.Exists(string.Format("{0}/asset/tagme3d_new_book{1}", Application.persistentDataPath, dataSetNumber));
+
+        for (int i = 0; i < 100; i++)
+        {
+            //index의 값은 아래와 같이 설정(0~399)
+            int index = i + ((dataSetNumber - 1) * 100);
+
+            //index번째 tagmeTargets가 string.Empty가 아니라면
+            if (!tagmeTargets[index].Equals(string.Empty))
+            {
+                //videoPath의 값을 아래와 같이 선언
+                string videoPath = string.Format("{0}/video/{1}.mp4", Application.persistentDataPath, tagmeTargets[index]);
+
+                for (int j = 0; j < audioFolder.Length; j++)
+                {
+                    //audioPath의 값을 아래와 같이 선언
+                    string audioPath = string.Format("{0}/audio/{1}/{2}.mp3", Application.persistentDataPath, audioFolder[j], tagmeTargets[index]);
+
+                    //videoPath나 audioPath가 존재하지 않으면
+                    if (!File.Exists(videoPath) || !File.Exists(audioPath))
+                    {
+		//i번째 checks의 값을 거짓으로 하고 반복문 종료
+                        checks[i] = false;
+                        break;
+                    }
+                }
+            }
+	//progressBar의 fillAmount값을 아래와 같이 설정
+            progressBar.fillAmount = 0.5f + (((index + 1) / 400f) * 0.5f);
+	//progressBar의 fillAmount값이 변동될때까지 기다렸다 리턴한다
+            yield return progressBar.fillAmount;
+        }
+
+        //checks의 길이만큼 반복문을 실행하여 checks의 i번째 값이 거짓이라면 check의 값을 거짓으로 선언하여 반복문 종료
+        for (int i = 0; i < checks.Length; i++)
+        {
+            if (!checks[i])
+            {
+
+                check = false;
+                break;
+            }
+        }
+        //assetCheck의 값과 check의 값이 모두 참일때까지 기다렸다 리턴
+        yield return check = assetCheck && check;
+
+        //check의 값이 참이라면 tagmeDataSets에 dataSetName를 추가한다
+        if (check)
+        {
+            tagmeDataSets.Add(dataSetName);
+        }
+
+        //dataSetNumber가 4 미만일 경우 dataSetNumber의 값을 1 추가하여 아래의 함수를 실행한다
+        if (dataSetNumber < 4)
+        {
+            dataSetNumber++;
+
+
+            VuforiaARController.Instance.RegisterVuforiaStartedCallback(LoadDataSet);
+        }
+        //dataSetNumber의 값이 4 이상일 경우 TargetPrefabSetting함수(5번 항목)를 코루틴으로 실행한다
+        else
+        {
+            StartCoroutine(TargetPrefabSetting());
+        }
+
+        yield return null;
+    }
+
+===================================================================================
+
+5. private IEnumerator TargetPrefabSetting()
+//InitializeTarget() 4권 완료 후 AssetBundle 컴포넌트에 셋팅 → 로딩끝
+    {
+        //progressBar의 fillAmount값을 0으로 하여 check의 값을 참으로 한다
+        progressBar.fillAmount = 0;
+        this.check = true;
+
+        //tagmeDatasets의 갯수가 0일 경우 prefabShelter의 nothingModel의 값을 참으로 한다
+        if (tagmeDataSets.Count.Equals(0))
+            prefabShelter.nothingModel = true;
+
+        //tagmeDataSets의 갯수만큼 반복문 실행
+        for (int j = 0; j < tagmeDataSets.Count; j++)
+        {
+            //bookNum의 값은 tagmeDataSets의 i번째 값의 마지막 문자를 정수로 변환한 값으로 선언
+            int bookNum = Convert.ToInt32(tagmeDataSets[j].Substring(tagmeDataSets[j].Length - 1, 1));
+
+//PC와 안드로이드에 따라 path의 값을 다르게 준다
+#if UNITY_EDITOR
+            string path = string.Format("file:///{0}/asset/tagme3d_new_book{1}", Application.persistentDataPath, bookNum);
+#elif UNITY_ANDROID
+            string path = string.Format("file://{0}/asset/tagme3d_new_book{1}", Application.persistentDataPath, bookNum);
+#endif
+
+            //webr의 값을 아래와 같이 선언하여 Send 시킨다.
+            UnityWebRequest webr = UnityWebRequestAssetBundle.GetAssetBundle(path);
+            webr.Send();
+
+            //webr이 끝나지 않았을 경우 끝나는 프레임까지 기다렸다 리턴한다
+            while (!webr.isDone)
+                yield return new WaitForEndOfFrame();
+
+            bundles의 값을 webr의 content로 선언한다
+            AssetBundle bundles = DownloadHandlerAssetBundle.GetContent(webr);
+
+
+            for (int i = 0; i < 100; i++)
+            {
+                int targetNum = ((bookNum - 1) * 100) + i;
+
+                //tagmeTargets의 targetNum번째의 값이 string.Empty가 아닐 경우
+                if (!tagmeTargets[targetNum].Equals(string.Empty))
+                {
+                    //req를 아래와 같이 선언한 후, tmModel의 targetNum번째의 값을 아래와 같이 선언하여 적용시킨다.
+                    AssetBundleRequest req = bundles.LoadAssetAsync<GameObject>(tagmeTargets[targetNum]);
+                    prefabShelter.tmModel[targetNum] = new TMModel((GameObject)req.asset, false);
+                }
+                //tagmeTargets의 targetNum번째의 값이 string.Empty일 경우
+                //tmModel의 targetNum번째의 값을 null값을 넣어 적용 시킨다.
+                else
+                    prefabShelter.tmModel[targetNum] = new TMModel(null, false);
+
+                //pregressText의 값을 아래와 같이 선언
+                progressText.text = string.Format("Preparing Tagme3D Friends   {0}/{1}", (j * 100) + (i + 1f), tagmeDataSets.Count * 100f);
+                //progressBar의 fillAmount의 값을 아래와 같이 선언하여
+                progressBar.fillAmount = ((j * 100) + (i + 1f)) / (tagmeDataSets.Count * 100f);
+                //fillAmount가 바뀔때까지 기다렸다 리턴한다
+                yield return progressBar.fillAmount;
+            }
+            //bundles의 안쓰이는 리소스들을 언로드 한 후
+            bundles.Unload(false);
+
+            //이후 할당되지 않거나 사용하지 않는 에셋을 모두 회수 한다.
+            Resources.UnloadUnusedAssets();
+        }
+
+        //끝나는 프레임까지 기다렸다 리턴
+        yield return new WaitForEndOfFrame();
+        //다 되었다면 로딩패널을 없애고 홈 화면을 띄운다.
+        canvasManager.OnLoadingDone();
+
+        yield return null;
+    }

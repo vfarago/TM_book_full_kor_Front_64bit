@@ -1,0 +1,607 @@
+개요
+ㄴ 파닉스 기능의 전반을 담당하는 스크립트
+ㄴ 동영상 재생, 녹음, 언어변경 등에 대응하여 오디오/텍스트/비디오 오브젝트를 바꾸는 기능을 수행
+
+===================================================================================
+
+1. 변수
+
+targetName { get; set; }(string)			//타겟 네임 받아오고 쓰기용도
+isFreeModel(bool)				//프리모델인가 아닌가 판단하는 용도
+
+image(RawImage)				//비디오 플레이용 패널
+recordButton(Button)			//녹음버튼
+
+targetWord,				//타겟 이름
+targetPron,				//타겟 발음
+recordText,				//녹음용 텍스트
+sentenceText(Text)				//버튼용 텍스트(사용 유무 불명)
+
+recordExist(bool)				//녹음 유무
+
+phonicsLength,				//파닉스 길이
+globalLength,				//글로벌언어 길이
+recordLength(float)				//녹음파일 길이
+recordingLength(int)				//녹음중 길이
+recording = false(bool)			//녹음용(초깃값 거짓)
+
+phonicsPlayer(IEnumerator)			//파닉스 플레이어 자기 자신
+videoPlayer(VideoPlayer)			//비디오 플레이어
+
+audioSource,				//기본 오디오 소스
+recordSource,				//녹음한 오디오 소스
+globalAudio,				//글로벌 오디오 소스
+engAudio(AudioSource)			//영어전용 오디오 소스
+
+audioClip,					//기본 오디오 클립
+recordClip(AudioClip)			//녹음용 오디오 클립
+
+timeCnt = 0(float)				//(불명)
+
+checkCode(CheckCode)			//CheckCode클래스
+canvasManager(CanvasManager)		//CanvasManager 클래스
+
+===================================================================================
+
+2. void Awake()
+    {
+        //CanvasManager를 찾아서 선언한다
+        canvasManager = FindObjectOfType<CanvasManager>();
+        //CheckCoder를 찾아서 선언한다
+        checkCode = FindObjectOfType<CheckCode>();
+        //canvasManager의 phonics를 이것으로 선언한다
+        canvasManager.phonics = this;
+
+        recordButton.onClick.AddListener(() => RecordController());
+        //sentenceButton.onClick.AddListener(() => SentenceController());
+        //exitButton.onClick.AddListener(() => canvasManager.ChoiceControll());
+    }
+
+===================================================================================
+
+3. void OnDisable()
+    {
+        //LocalizationManager의 CurrentLanguage를 canvasManager의 ui_CurrentLang로 설정한다
+        LocalizationManager.CurrentLanguage = canvasManager.ui_CurrentLang;
+
+        //로드가 안되었거나 쓰이지 않는 에셋들을 정리한다
+        Resources.UnloadUnusedAssets();
+
+        //recordButton의 onClick의 RemoveAllListeners 함수를 실행한다(리스너를 모두 제거한다)
+        recordButton.onClick.RemoveAllListeners();
+        //sentenceButton.onClick.RemoveAllListeners();
+        //exitButton.onClick.RemoveAllListeners();
+    }
+
+===================================================================================
+
+4. void Start()
+    {
+        //이 어플리케이션의 백그라운드기동을 활성화 시킨다
+        Application.runInBackground = true;
+
+        //각각의 변수들에 해당하는 컴포넌트를 달아준다
+        videoPlayer = gameObject.AddComponent<VideoPlayer>();
+        audioSource = gameObject.AddComponent<AudioSource>();
+        globalAudio = gameObject.AddComponent<AudioSource>();
+        recordSource = gameObject.AddComponent<AudioSource>();
+        engAudio = gameObject.AddComponent<AudioSource>();
+
+        //어플리케이션이 시작할 때 자동으로 재생하는 것을 막아준다
+        videoPlayer.playOnAwake = false;
+        globalAudio.playOnAwake = false;
+        audioSource.playOnAwake = false;
+        recordSource.playOnAwake = false;
+        engAudio.playOnAwake = false;
+
+        //ChangeText에 참을 넣어 코루틴으로 실행한다
+        StartCoroutine(ChangeText(true));
+
+        //한번 인식한 타겟 이름 저장
+        bool isInclude = false;
+        //checkCode의 objName이 존재하는 만큼 반복문을 돌린다
+        foreach (string st in checkCode.objName)
+        {
+            //st가 targetName와 동일할 경우 isInclude의 값을 참으로 한다
+            if (st.Equals(targetName))
+                isInclude = true;
+        }
+        //isInclude의 값이 거짓일 경우
+        if (!isInclude)
+        {
+            //checkCode의 objName에 targetName를 추가
+            checkCode.objName.Add(targetName);
+            //checkcode의 SaveOnTrackingObject 함수를 실행(스캔한 타겟 이름을 로컬파일로 기억)
+            checkCode.SaveOnTrackingObject();
+        }
+    }
+
+===================================================================================
+
+//Phonics 시작시 녹음파일 있는지 체크
+5.void CurrentSelectRecord()
+    {
+        //recordFilePath를 아래와 같이 선언 
+        string recordFilePath = string.Format("{0}/RecordedAudio/{1}.wav", Application.persistentDataPath, targetName);
+
+        //recordFilePath 경로에 파일이 존재 할 경우
+        if (File.Exists(recordFilePath))
+        {
+            //recordExist의 값을 참으로 하고 canvasManager의 btn_myVoice의 컬러를 흰색으로
+            recordExist = true;
+            canvasManager.btn_myVoice.GetComponent<Image>().color = Color.white;
+        }
+        //recordFilePath 경로에 파일이 존재 하지 않을 경우
+        else
+        {
+            //recordExist의 값을 거짓으로 하고 canvasManager의 btn_myVoice의 컬러를 회색으로
+            recordExist = false;
+            canvasManager.btn_myVoice.GetComponent<Image>().color = Color.gray;
+        }
+    }
+
+===================================================================================
+
+//파닉스 파트가 최초로 실행 되거나 혹은 언어변경 버튼을 클릭 할 대
+6. IEnumerator ChangeText(bool isFirst)
+    {
+        //LocalizeWord 함수를 실행
+        LocalizeWord();
+
+        //targetWord의 text가 변경될때 까지 기다렸다 리턴
+        yield return targetWord.text;
+
+        //isFirst가 참일 경우
+        if (isFirst)
+        {
+            //CurrentSelectRecord함수를 실행
+            CurrentSelectRecord();
+            //canvasManager의 LocalPanelInitialSetting 함수에 LocalizationManager의 CurrentLanguage를 담아 실행
+            canvasManager.LocalPanelInitialSetting(LocalizationManager.CurrentLanguage);
+
+            //PlayPhonics함수를 실행
+            PlayPhonics();
+        }
+        //isFirst가 거짓일 경우
+        else
+        {
+            //__________Only Global Audio
+            //audioSource나 recordSource나 videoPlayer나 globalAudio나 engAudio가 재생 중일 경우 StopPhonics 함수에 거짓을 담아 실행
+            if (audioSource.isPlaying || recordSource.isPlaying || videoPlayer.isPlaying || globalAudio.isPlaying || engAudio.isPlaying)
+                StopPhonics(false);
+
+            //recording이 참일 경우
+            if (recording)
+            {
+                //StopRecord 함수를 실행하고 recordButton의 스프라이트를 아래 리소스를 로드하여 변경
+                StopRecord();
+                recordButton.GetComponent<Image>().sprite = Resources.Load<Sprite>("Sprites/Scan/btn_rec(95x95)");
+            }
+            //recording이 거짓일 경우
+            else
+            {
+                //phonicsPlayer를 LoadPhonics함수에 아래 값을 넣어 실행
+                phonicsPlayer = LoadPhonics(false, true, false, false);
+                //phonicsPlayer를 코루틴으로 실행
+                StartCoroutine(phonicsPlayer);
+            }
+        }
+    }
+
+===================================================================================
+
+7. void LocalizeWord()
+    {
+        //aa와 bb를 다음과 같이 선언
+        string aa = LocalizationManager.GetTermTranslation(targetName);
+        string bb = LocalizationManager.GetTermTranslation(targetName + "_pron");
+
+        //LocalizationManager의 CurrentLanguage가 are와 같거나 LocalizationManager의 CurrentLanguage가 heb와 같을 경우 targetWord의 텍스트를 LocalizationManager의 FixRTL_IfNeeded함수에 aa를 넣어 실행한 결괏값으로 선언
+        if (LocalizationManager.CurrentLanguage.Equals("are") || LocalizationManager.CurrentLanguage.Equals("heb"))
+            targetWord.text = LocalizationManager.FixRTL_IfNeeded(aa);
+        //그렇지 않을 경우 targetWord의 텍스트를 aa로 선언
+        else
+            targetWord.text = aa;
+
+        //targetPron의 텍스트를 bb로 선언
+        targetPron.text = bb;
+
+        //setenceText의 텍스트와 폰트를 아래와 같이 선언
+        sentenceText.text = canvasManager.phoSentenceString;
+        sentenceText.font = canvasManager.localizeFont;
+    }
+
+===================================================================================
+
+//녹음한 목소리를 재생할 경우
+8. void PlayRecPhonics()
+    {
+        //audioSource나 recordSource나 videoPlayer나 globalAudio나 engAudio가 참일 경우(==재생 중일 경우) StopPhonics 함수에 참을 담아 실행
+        if (audioSource.isPlaying || recordSource.isPlaying || videoPlayer.isPlaying || globalAudio.isPlaying || engAudio.isPlaying)
+            StopPhonics(true);
+
+        //recording가 참일 경우
+        if (recording)
+        {
+            StopRecord 함수를 실행 한 후, recordButton의 스프라이트를 아래의 리소스로 세팅
+            StopRecord();
+            recordButton.GetComponent<Image>().sprite = Resources.Load<Sprite>("Sprites/Scan/btn_rec(95x95)");
+        }
+        //recording가 거짓일 경우
+        else
+        {
+            //phonicsPlayer는 LoadPhonics에 아래의 값을 집어넣어 리턴되는 값으로 설정
+            phonicsPlayer = LoadPhonics(true, false, false, false);
+            //phonicsPlayer를 코루틴으로 실행
+            StartCoroutine(phonicsPlayer);
+            //canvasManager의 localizePhonicsImage의 스프라이트를 아래의 리소스로 세팅
+            canvasManager.localizePhonicsImage.sprite = Resources.Load<Sprite>("Sprites/Localize/btn_language_custom(70x70)");
+        }
+    }
+
+===================================================================================
+
+//저장되어있는 원래 보이스 재생
+9. void PlayPhonics()
+    {
+        //LocalizationManager의 CurrentLanguage가 eng이면 isEng의 값은 참, 아니면 거짓
+        bool isEng = (LocalizationManager.CurrentLanguage.Equals("eng") ? isEng = true : isEng = false);
+       
+        //audioSource나 recordSource나 videoPlayer나 globalAudio나 engAudio가 참일 경우(==재생 중일 경우) StopPhonics 함수에 참을 담아 실행
+        if (audioSource.isPlaying || recordSource.isPlaying || videoPlayer.isPlaying || globalAudio.isPlaying || engAudio.isPlaying)
+            StopPhonics(true);
+
+        //recording가 참일 경우 StopRecord 함수를 실행한 후, recordButton의 스프라이트를 아래의 리소스로 세팅
+        if (recording)
+        {
+            StopRecord();
+            recordButton.GetComponent<Image>().sprite = Resources.Load<Sprite>("Sprites/Scan/btn_rec(95x95)");
+        }
+        //recording가 거짓일 경우 phonicsPlayer는 LoadPhonics 함수에 아래의 값을 넣어 리턴되는 값으로 설정
+        else
+        {
+            phonicsPlayer = LoadPhonics(false, false, false, isEng);
+            //이후 phonicsPlayer를 코루틴으로 실행
+            StartCoroutine(phonicsPlayer);
+        }
+    }
+
+
+===================================================================================
+
+//녹음 버튼 클릭 시
+10. void RecordController() //true = Start Record
+    {
+        //audioSource나 recordSource나 videoPlayer나 globalAudio나 engAudio가 참일 경우(==재생 중일 경우) StopPhonics 함수에 참을 담아 실행
+        if (audioSource.isPlaying || recordSource.isPlaying || videoPlayer.isPlaying || globalAudio.isPlaying || engAudio.isPlaying)
+            StopPhonics(true);
+
+        //recording가 참일 경우 StopRecord 함수를 실행한 후, recordButton의 스프라이트를 아래의 리소스로 세팅
+        if (recording)
+        {
+            StopRecord();
+            recordButton.GetComponent<Image>().sprite = Resources.Load<Sprite>("Sprites/Scan/btn_rec(95x95)");
+        }
+        //recording가 거짓일 경우
+        else
+        {
+            //timeCnt의 값을 0으로
+            timeCnt = 0;
+            //phonicsPlayer는 LoadPhonics 함수에 아래의 값을 넣어 리턴되는 값으로 설정
+            phonicsPlayer = LoadPhonics(false, false, true, false);
+            //이후 phonicsPlayer를 코루틴으로 실행
+            StartCoroutine(phonicsPlayer);
+            //recordButton의 스프라이트를 아래의 리소스로 세팅
+            recordButton.GetComponent<Image>().sprite = Resources.Load<Sprite>("Sprites/Scan/btn_stop(95x95)");
+        }
+    }
+
+===================================================================================
+
+//비디오, 오디오 재생 / 녹음에 관한 모든것을 관장하는 코루틴용 함수
+11. IEnumerator LoadPhonics(bool isRecordPlay, bool onlyGlobal, bool startRecord, bool isEng)
+    {
+        //__________Play Only GlobalAudio
+        //onlyGlobalModel이 참일 경우
+        if (onlyGlobal)
+        {
+            //isFreeModel이 참일 경우(프리모델의 경우)
+            if (isFreeModel)
+            {
+                globalAudil의 클립은 아래의 리소스로 선언
+                globalAudio.clip = Resources.Load<AudioClip>(string.Format("audio/{0}/{1}", LocalizationManager.CurrentLanguage, targetName));
+                //globalLength는 globalAudio의 클립의 길이만큼으로 선언
+                globalLength = globalAudio.clip.length;
+            }
+            //isFreeModel이 거짓일 경우(프리모델이 아닌 경우)
+            else
+            {
+                //globalAudioFile은 아래의 경로에서 찾아와 세팅
+                WWW globalAudioFile = new WWW(string.Format("file:///{0}/audio/{1}/{2}.mp3",
+                    Application.persistentDataPath, LocalizationManager.CurrentLanguage, targetName));
+                //globalAudioFile이 불러와 질때까지 기다렸다 리턴
+                yield return globalAudioFile;
+
+                //globalAudio의 클립은 globalAudioFile의 클립으로 선언
+                globalAudio.clip = globalAudioFile.GetAudioClip();
+
+                //(globalAudioFile의 클립의 주파수가 3만을 초과할 경우 globalLength의 값을 아래와 같이 선언
+                if (globalAudioFile.GetAudioClip().frequency > 30000)
+                    globalLength = (float)globalAudio.clip.samples / globalAudio.clip.frequency;
+                //(globalAudioFile의 클립의 주파수가 3만을 이하의 경우 globalLength의 값을 아래와 같이 선언
+                else
+                    globalLength = (float)globalAudio.clip.samples / globalAudio.clip.frequency / globalAudio.clip.channels;
+            }
+            //globalAudio를 재생
+            globalAudio.Play();
+
+            //globalLength만큼에 0.2초를 더해 기다렸다 리턴
+            yield return new WaitForSeconds(globalLength + 0.2f);
+            //globalAudio를 멈추고 globalAudio의 클립을 null로 한 뒤 브레이크
+            globalAudio.Stop();
+            globalAudio.clip = null;
+            yield break;
+        }
+
+        //startRecord가  참일 경우 널이 될때까지 기다렸다 리턴
+        if (startRecord)
+        {
+            yield return null;
+        }
+        //isRecordPlay가 참일 경우
+        else if (isRecordPlay)
+        {
+            //__________RecordAudioClip Setting
+            //audioRecord를 아래의 경로에서 찾아와 세팅
+            WWW audioRecord = new WWW(string.Format("file:///{0}/RecordedAudio/{1}.wav", Application.persistentDataPath, targetName));
+            //audioRecord가 완료될 때 까지 기다렸다 리턴
+            yield return audioRecord;
+            //recordSource의 클립을 audioRecord의 클립으로 선언
+            recordSource.clip = audioRecord.GetAudioClip();
+            //recordLength를 recordSource의 클립의 길이로 선언
+            recordLength = recordSource.clip.length;
+        }
+        //위의 경우들이 아닐 경우
+        else
+        {
+            //__________AudioClip & GlobalAudioClip Setting
+            //isFreeModel이 참일 경우(프리모델의 경우)
+            if (isFreeModel)
+            {
+                //audioSource의 클립을 아래의 경로의 리소스에서 가져와 세팅
+                audioSource.clip = Resources.Load<AudioClip>(string.Format("audio/word/{0}", targetName));
+                //phonicsLength의 값은 audioSource의 클립의 길이로 선언
+                phonicsLength = audioSource.clip.length;
+
+                //globalAudio의 클립을 아래의 경로의 리소스에서 가져와 세팅
+                globalAudio.clip = Resources.Load<AudioClip>(string.Format("audio/{0}/{1}", LocalizationManager.CurrentLanguage, targetName));
+                //globalLength의 값은 audioSource의 클립의 길이로 선언
+                globalLength = globalAudio.clip.length;
+            }
+            //isFreeModel이 거짓일 경우(프리모델이 아닐 경우)
+            else
+            {
+                //audioFile은 아래의 경로에서 가져와 세팅
+                WWW audioFile = new WWW(string.Format("file:///{0}/audio/word/{1}.mp3", Application.persistentDataPath, targetName));
+                //audioFile이 완료될 때 까지 기다렸다 리턴
+                yield return audioFile;
+                //audioSource의 클립은 audioFile의 클립으로 선언
+                audioSource.clip = audioFile.GetAudioClip();
+
+                //phonicsLength는 아래와 같이 세팅
+                //if (audioFile.GetAudioClip().frequency > 30000)
+                phonicsLength = (float)audioSource.clip.samples / audioSource.clip.frequency;
+                //else
+                //    phonicsLength = (float)audioSource.clip.samples / audioSource.clip.frequency / audioSource.clip.channels;
+
+                //globalAudioFile은 아래의 경로에서 가져와 세팅
+                WWW globalAudioFile = new WWW(string.Format("file:///{0}/audio/{1}/{2}.mp3",
+                    Application.persistentDataPath, LocalizationManager.CurrentLanguage, targetName));
+                //globalAudioFile이 완료될 때 까지 기다렸다 리턴
+                yield return globalAudioFile;
+                //globalAudio의 클립은 GlobalAudioFile의 클립을 가져와서 세팅
+                globalAudio.clip = globalAudioFile.GetAudioClip();
+
+                //globalLength의 값은 golbalAudioFile의 주파수가 3만을 초과하면 if쪽으로, 그렇지 않으면 else 쪽으로 세팅
+                if (globalAudioFile.GetAudioClip().frequency > 30000)
+                    globalLength = (float)globalAudio.clip.samples / globalAudio.clip.frequency;
+                else
+                    globalLength = (float)globalAudio.clip.samples / globalAudio.clip.frequency / globalAudio.clip.channels;
+            }
+        }
+
+        //__________VideoClip Setting
+        //isFreeModel이 참일 경우(프리모델일 경우)
+        if (isFreeModel)
+        {
+            //videoPlayer의 소스를 VideoSource의 비디오클립으로, videoPlayer의 Clip를 아래의 리소스에서 가져와 세팅
+            videoPlayer.source = VideoSource.VideoClip;
+            videoPlayer.clip = Resources.Load<VideoClip>(string.Format("video/{0}", targetName));
+        }
+        //isFreeModel이 거짓일 경우(프리모델이 아닐 경우)
+        else
+        {
+            //videoPlayer의 소스를 VideoSource의 Url로, videoPlayer의 url을 아래의 경로에서 가져와 세팅
+            videoPlayer.source = VideoSource.Url;
+            videoPlayer.url = Path.Combine(Application.persistentDataPath, string.Format("video/{0}.mp4", targetName));
+        }
+        videoPlayer의 Prepare 함수를 실행
+        videoPlayer.Prepare();
+
+        //videoPlayer의 isPrepared가 완료 될 때 까지 기다렸다 리턴
+        yield return new WaitUntil(() => videoPlayer.isPrepared);
+
+        //image의 텍스쳐를 videoPlayer의 텍스쳐로 선언
+        image.texture = videoPlayer.texture;
+        //videoPlayer를 재생
+        videoPlayer.Play();
+
+        //startRecord가 참일 경우
+        if (startRecord)
+        {
+            //__________Start Recording
+            //recording의 값을 참으로, 
+            recording = true;
+            //recordingLength의 값을 phonicsLength의 2배한 값의 반올림한 것으로 설정
+            recordingLength = Mathf.CeilToInt(phonicsLength * 2);
+
+            //recordClip Microphone의 Start함수에 아래의 값을 넣어 실행(녹음을 시작)
+            recordClip = Microphone.Start(null, false, recordingLength, 44100);
+
+            //recordingLength초 만큼 기다렸다 리턴
+            yield return new WaitForSeconds(recordingLength);
+            //videoPlayer를 멈추고 StopRecord함수를 실행(녹음을 멈춤)
+            videoPlayer.Stop();
+            StopRecord();
+        }
+        //startRecord가 참일 경우
+        else
+        {
+            //__________Play Record or Phonics Audio
+            //isRecordPlay가 참일 경우
+            if (isRecordPlay)
+            {
+                //recordSource의 Play함수를 실행(recordSource를 재생)
+                recordSource.Play();
+                //recordLength초 만큼 기다렸다 리턴
+                yield return new WaitForSeconds(recordLength);
+            }
+            //isRecordPlay가 거짓일 경우
+            else
+            {
+                //audioSource의 Play함수를 실행(audioSource를 재생)
+                audioSource.Play();
+
+                //phonicsLength초 + 0.2초 만큼 기다렸다 리턴
+                yield return new WaitForSeconds(phonicsLength + 0.2f);
+                //audioSource의 Stop함수를 실행(audioSource를 멈춤)
+                audioSource.Stop();
+
+                //변수선언
+                float waitTime;
+
+                //isFreeModel이 참일 경우(프리모델일 경우)
+                if (isFreeModel)
+                {
+                    //engAudio의 클립은 아래의 리소스를 가져와 세팅
+                    engAudio.clip = Resources.Load<AudioClip>(string.Format("audio/eng/{0}", targetName));
+                    //watiTime는 engAudio의 클립의 길이만큼으로 선언
+                    waitTime = engAudio.clip.length;
+                }
+                //isFreeModel이 거짓일 경우(프리모델이 아닐 경우)
+                else
+                {
+                    //engFile은 아래의 경로에서 가져와 세팅
+                    WWW engFile = new WWW(string.Format("file:///{0}/audio/eng/{1}.mp3", Application.persistentDataPath, targetName));
+                    //engFile이 완료될 때까지 기다렸다 리턴
+                    yield return engFile;
+                    //engAudio의 클립은 engFile의 오디오 클립을 가져와 선언
+                    engAudio.clip = engFile.GetAudioClip();
+
+                    //waitTime를 아래와 같이 선언
+                    //if (engFile.GetAudioClip().frequency > 30000)
+                    waitTime = (float)engAudio.clip.samples / engAudio.clip.frequency;
+                    //else
+                    //    waitTime = (float)engAudio.clip.samples / engAudio.clip.frequency / engAudio.clip.channels;
+                }
+                //engAudio의 Play함수를 실행(engAudio를 재생)
+                engAudio.Play();
+
+                //waitTime초 + 0.2초만큼 기다렸다 리턴
+                yield return new WaitForSeconds(waitTime + 0.2f);
+
+                //iksEng의 값이 거짓일 경우
+                if (!isEng)
+                {
+                    engAudio의 Stop 함수를 실행(engAudio를 멈춤)
+                    engAudio.Stop();
+
+                    //globalAudio의 Play 함수를 실행(globalAudio를 재생)
+                    globalAudio.Play();
+                    //globalLength초 만큼 기다렸다 리턴
+                    yield return new WaitForSeconds(globalLength);
+                }
+            }
+            //StopPhonics에 참을 넣어 실행
+            StopPhonics(true);
+        }
+    }
+
+===================================================================================
+
+//파닉스 멈추기 위한 함수
+12. void StopPhonics(bool isStopVideo)
+    {
+        //모든 코루틴을 멈추고 phonicsPlayer의 값을 null로
+        StopAllCoroutines();
+        phonicsPlayer = null;
+
+        //isStopVideo가 참일 경우
+        if (isStopVideo)
+        {
+            //videoPlayer의 isPaused가 참이 아닐 경우(일시 정지가 아닐 경우) videoPlayer의 Stop함수를 실행(videoPlayer를 멈춤)
+            if (!videoPlayer.isPaused)
+                videoPlayer.Stop();
+            //videoPlayer.clip = null;
+        }
+
+        //audioSource의 Stop함수를 실행시키고(audioSource를 멈춤) audioSource의 클립을 null로 선언
+        audioSource.Stop();
+        audioSource.clip = null;
+
+        //globalAudio의 Stop함수를 실행시키고(globalAudio를 멈춤) globalAudio의 클립을 null로 선언
+        globalAudio.Stop();
+        globalAudio.clip = null;
+
+        //recordSource의 Stop함수를 실행시키고(recordSource를 멈춤) recordSource의 클립을 null로 선언
+        recordSource.Stop();
+        recordSource.clip = null;
+
+
+        //engAudio의 Stop함수를 실행시키고(engAudio를 멈춤) engAudio의 클립을 null로 선언
+        engAudio.Stop();
+        engAudio.clip = null;
+    }
+
+===================================================================================
+
+//녹음 멈추기 위한 함수
+12. void StopRecord()
+    {
+        //recording을 거짓으로
+        recording = false;
+        //Microphone의 End에 null을 넣어 실행(마이크를 종료)
+        Microphone.End(null);
+        //SavWav의 Save 함수를 아래의 값을 넣어 실행(저장시킨다)
+        SavWav.Save(string.Format("{0}/RecordedAudio/{1}", Application.persistentDataPath, targetName), recordClip);
+
+        //모든 코루틴을 종료시킴
+        StopAllCoroutines();
+        //recordText의 텍스트를 비움
+        recordText.text = string.Empty;
+        //recordExist의 값을 참으로
+        recordExist = true;
+        //PlayRecPhonics함수를 실행
+        PlayRecPhonics();
+        //recordButton의 스프라이트를 아래의 리소스를 가져와 변경
+        recordButton.GetComponent<Image>().sprite = Resources.Load<Sprite>("Sprites/Record/btn_rec(95x95)");
+
+        //CurrentSelectRecord함수를 실행
+        CurrentSelectRecord();
+        //canvasManager의 LocalPanelInitialSetting함수에 custom을 넣어 실행
+        canvasManager.LocalPanelInitialSetting("custom");
+    }
+
+===================================================================================
+
+13. void Update()
+    {
+        //recording의 값이 참일 경우(녹음중일때)
+        if (recording)
+        {
+            timeCnt의 값을 다음과 같이 선언
+            timeCnt += Time.deltaTime;
+            //recordText의 텍스트를 아래와 같이 변경하여 매 프레임마다 띄운다
+            recordText.text = string.Format("{0:00.0} / {1:00.0}s", timeCnt, recordingLength);
+        }
+    }

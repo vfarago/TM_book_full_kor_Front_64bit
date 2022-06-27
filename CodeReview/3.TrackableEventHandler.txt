@@ -1,0 +1,101 @@
+개요
+ㄴ DynamicTrackableEventHandler에서 포함시키는 클래스
+ㄴ 즉, 부모클래스에 해당된다
+ㄴ 부모클래스이기 때문에 모든 함수들이 가상함수가 된다.
+
+===================================================================================
+
+1. 변수
+ㄴ 모든 변수가 protected로 돼어있어, 자식클래스인 DynamicTrackableEventHandler가 해당 변수들을 사용할 수 있다
+mTrackableBehaviour(TrackableBehaviour)	//TrackableBehaviour 클래스
+currentStatus(TrackableBehaviour.Status)	//TrackableBehaviour 클래스의 enum인 Status
+
+arManager(ARManager)			//ARManager 클래스
+canvasManager(CanvasManager)		//CanvasManager 클래스
+prefabLoader(PrefabLoader)			//prefabLoader 클래스
+prefabShelter(PrefabShelter)			//prefabShelter 클래스
+
+===================================================================================
+
+2. virtual void Awake()
+    {
+        //변수들을 알맞게 선언
+        arManager = FindObjectOfType<ARManager>();
+        canvasManager = FindObjectOfType<CanvasManager>();
+        prefabLoader = FindObjectOfType<PrefabLoader>();
+        prefabShelter = FindObjectOfType<PrefabShelter>();
+
+        mTrackableBehaviour = GetComponent<TrackableBehaviour>();
+        //mTrackableBehaivourㅇ ㅣ존재 할 경우
+        if (mTrackableBehaviour)
+        {
+            //mTrackableBehaviour의 RegisterTrackableEventHandler 함수에 본 클래스를 담아 실행(?)
+            mTrackableBehaviour.RegisterTrackableEventHandler(this);
+        }
+        //currentStatus에 해당 값을 넣고, 이후 OnTrackingLost 함수를 실행
+        currentStatus = TrackableBehaviour.Status.DETECTED;
+        OnTrackingLost();
+    }
+
+===================================================================================
+
+3. virtual void OnTrackableStateChanged(TrackableBehaviour.Status previousStatus, TrackableBehaviour.Status newStatus)	//타겟의 상태가 변화할 때 실행되는 함수
+    {
+        //인자인 newStatus가 아래의 값과 같을 때
+        if (newStatus == TrackableBehaviour.Status.DETECTED ||
+            newStatus == TrackableBehaviour.Status.TRACKED ||
+            newStatus == TrackableBehaviour.Status.EXTENDED_TRACKED)
+        {
+            //current의 값을 해당 값으로 한 뒤 OnTrackingFound 함수를 실행
+            currentStatus = newStatus;
+            OnTrackingFound();
+        }
+        else	//그 외
+        {
+            //current의 값을 해당 값으로 한 뒤 OnTrackingLost 함수를 실행
+            currentStatus = newStatus;
+            OnTrackingLost();
+        }
+    }
+
+===================================================================================
+
+4. virtual void OnTrackingFound()	//타겟을 찾았을 때 사용되는 함수
+    {
+        //rendererComponents와 colliderComponents를 자식에게서 해당하는 것들을 가져와 선언한다
+        Renderer[] rendererComponents = GetComponentsInChildren<Renderer>(true);
+        Collider[] colliderComponents = GetComponentsInChildren<Collider>(true);
+
+        //rendererComponents의 길이만큼 반복문을 돌려 i번째 rendererComponents를 활성화 시킨다
+        for (int i = 0; i < rendererComponents.Length; i++)
+        {
+            rendererComponents[i].enabled = true;
+        }
+
+        //colliderComponents의 길이만큼 반복문을 돌려 i번째 colliderComponents를 활성화 시킨다
+        for (int i = 0; i < colliderComponents.Length; i++)
+        {
+            colliderComponents[i].enabled = true;
+        }
+    }
+
+===================================================================================
+
+    5. protected virtual void OnTrackingLost()	//타겟을 잃었을 때 사용되는 함수
+    {
+        //rendererComponents와 colliderComponents를 자식에게서 해당하는 것들을 가져와 선언한다
+        Renderer[] rendererComponents = GetComponentsInChildren<Renderer>(true);
+        Collider[] colliderComponents = GetComponentsInChildren<Collider>(true);
+
+        //rendererComponents의 길이만큼 반복문을 돌려 i번째 rendererComponents를 비활성화 시킨다
+        for (int i = 0; i < rendererComponents.Length; i++)
+        {
+            rendererComponents[i].enabled = false;
+        }
+
+        //colliderComponents의 길이만큼 반복문을 돌려 i번째 colliderComponents를 비활성화 시킨다
+        for (int i = 0; i < colliderComponents.Length; i++)
+        {
+            colliderComponents[i].enabled = false;
+        }
+    }

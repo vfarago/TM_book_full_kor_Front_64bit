@@ -1,0 +1,921 @@
+개요
+ㄴ prefab파일과 audio파일이 많아 (prefab파일 1개 + audio파일 16개가 하나의 단어에 들어감 * 400개의 단어가 존재) 그걸 전부 Resource에 넣을 경우 어플리케이션 자체의 용량이 커지고 그만큼 무거워 지기 때문에
+ㄴ 많은 양의 파일들을 외부 경로에 다운로드 하여 로딩시에 절대경로에 있는 해당 파일들을 불러오는 것으로 어플리케이션 자체의 용량을 줄일 수 있음
+ㄴ 해당 스크립트는 외부 경로에 다운로드 된 파일이 없을 경우 그 위치에 파일들을 다운로드하거나, 어플리케이션 구동시에 해당 파일들을 PrefabShelter의 하위오브젝트로 달아주는 기능을 수행한다
+
+=============================================================================
+
+//나중에 변수들 어떤거에 쓰이는가 작업 다시 필요함
+1. 변수
+assetLoaderText,			//에셋 로더 텍스트
+downSpeedText(Text)		//다운로드 스피드 텍스트
+bookDownloadGO(GameObject)	//책 다운로드용 게임오브젝트
+mainProgress(Image)		//메인 프로그래스 이미지
+
+aDSL(AnimalDataSetLoader)		//AnimalDataSetLoader 클래스
+canvasManager(CanvasManager)	//CanvasManager 클래스
+checkCode(CheckCode)		//CheckCode 클래스
+
+savedDataSet(string)			//저장된 데이터 세트
+bookNumber(int)			//책 넘버
+fileList(List<FileList>, [SerializeField])	//파일 리스트(시리얼라이즈필드)
+
+ping(WWW)			//그냥 핑 WWW
+downPing(WWW)			//다운로드용 핑 WWW
+blocker(GameObject)		//블로커 게임오브젝트
+downloadInProgress(bool)		//다운로드중인가 아닌가 판단하는 bool
+pingWait = 6f(float)			//pingWait 6초
+pingWaitEllap(float)			
+downPingWait = 9f(float)		//downPingWait 9초
+downPingWaitEllap(float)
+downServerWait = 12f(float)		//downServerWait 12초
+downServerWaitEllap(float)
+
+totalSize(long)			//토탈 사이즈 용량
+lastSize(long)			//마지막 사이즈 용량
+timerSpeed = 0.75f(float)		//timerSpeed 0.75초
+timerSpeedEllap = 0(float)		
+speed = 0(double)			//속도 0
+
+url(string)				//웹 주소 "https://tm-book-2019-2-19.oss-cn-beijing.aliyuncs.com/assets/"
+audioFolder(string[])			//오디오 폴더 이름들 모음
+
+coroutineNumber(int)		//코루틴 숫자 세기용
+coroutines(List<IEnumerator>)		//코루틴 리스트들
+
+
+=============================================================================
+
+2. void Awake()
+    {
+        //각자 클래스에 맞게끔 선언
+        aDSL = GetComponent<AnimalDataSetLoader>();
+        canvasManager = FindObjectOfType<CanvasManager>();
+        checkCode = FindObjectOfType<CheckCode>();
+    }
+
+=============================================================================
+
+//서버와 계속 연결해야 하기 때문에 프레임 단위로 실행하는 Update문에 넣은 것으로 추정
+3. void Update()
+    {
+        //ping 값이 null이 아닐 때
+        if (ping != null)
+        {
+            //ping이 끝났으면서 ping의 error가 null혹은 Empty일 때(error가 존재하지 않을 때)
+            if (ping.isDone && string.IsNullOrEmpty(ping.error))
+            {
+                //Download 함수에 saveDataSet를 담아 코루틴으로 실행하여 디버그를 뿌린 이후 ping을 null로 만듦
+                StartCoroutine(Download(savedDataSet));
+
+                Debug.Log("Connected successfully");
+                ping = null;
+            }
+            //pingWaitEllap 값이 pingWait 미만일 경우
+            else if (pingWaitEllap < pingWait)
+            {
+                //pingwaitEllap에 Time.deltaTime를 더함
+                pingWaitEllap += Time.deltaTime;
+            }
+            //위 경우들에 해당되지 않는 경우
+            else
+            {
+                //아래의 디버그를 뿌림
+                Debug.Log("Connection check failed - No ping from server");
+                //blocker를 없애고 ActiveWindow 함수에 connectFail를 넣어 실행한 후 savedDataSet를 비우고 ping을 null로 설정
+                Destroy(blocker);
+                ActiveWindow("connectFail");
+                savedDataSet = string.Empty;
+                ping = null;
+            }
+        }
+
+        //downloadInProgress가 참일 경우
+        if (downloadInProgress)
+        {
+            //Application.internetReachability이 NetworkReachability.ReachableViaCarrierDataNetwork 또는 NetworkReachability.ReachableViaLocalAreaNetwork와 동일할경우 (네트워크에 연결되어있을때 또는 서버에 연결되어있을때로 추정)
+            if (Application.internetReachability == NetworkReachability.ReachableViaCarrierDataNetwork ||
+                Application.internetReachability == NetworkReachability.ReachableViaLocalAreaNetwork)
+            {
+                //downServerWaitEllap의 값을 0으로
+                downServerWaitEllap = 0;
+            }
+            //Application.internetReachability의 값이 NetworkReachability.NotReachable일 경우 (인터넷에 연결되어있지 않을 경우로 추정)
+            else if (Application.internetReachability == NetworkReachability.NotReachable)
+            {
+                //downServerWaitEllap의 값이 downServerWait미만일 경우 (서버와 연결을 시도할 경우)
+                if (downServerWaitEllap < downServerWait)
+                {
+                    //downServerWaitEllap의 값에 downServerWait를 더함
+                    downServerWaitEllap += Time.deltaTime;
+                }
+                //downServerWaitEllap의 값이 downServerWait이상일 경우 (서버의 응답이 없을 경우)
+                else
+                {
+                    //downServerWaitEllap의 값을 0으로 설정
+                    downServerWaitEllap = 0;
+                    //ForceQuitDownload함수에 참을 넣어 실행(다운로드 강제종료 실행) 후 디버그를 뿌림
+                    ForceQuitDownload(true);
+                    Debug.Log("Download force quitted - Internet connection lost");
+                }
+            }
+            //위 경우가 아닐 경우(인터넷에 연결은 되어있으나, 서버와 연결이 되어있지 않았을 경우로 추정)
+            else
+            {
+                //downPing의 값이 null이 아닐 경우
+                if (downPing != null)
+                {
+                    //downPing가 완료돼어있으면서 downPing의 error가 null이거나 존재하지 않을 경우(error가 없을 경우)
+                    if (downPing.isDone && string.IsNullOrEmpty(downPing.error))
+                    {
+                        //downPing을 url을 넣어 새 WWW로 선언
+                        downPing = new WWW(url);
+                        //downPing = new WWW(pingurl);
+                    }
+                    //위쪽은 아니지만 dwonPingwaitEllap의 값이 dowmPingWait미만일 경우
+                    else if (downPingWaitEllap < downPingWait)
+                    {
+                        //downPingWaitEllap의 값에 Time.deltaTime를 더함
+                        downPingWaitEllap += Time.deltaTime;
+                    }
+                    //위 경우들이 아니라면
+                    else
+                    {
+                    //ForceQuitDownload함수에 참을 넣어 실행(다운로드 강제종료 실행) 후 디버그를 뿌림
+                        ForceQuitDownload(true);
+                        Debug.Log("Download force quitted - Server connection lost");
+                    }
+                }
+            }
+        }
+    }
+
+=============================================================================
+
+//책이름에 대한 파일들을 체크하여 있으면 프리펩을 바로 세팅하고, 없을경우 프리펩을 다운로드 후 세팅해주는 함수
+4. void CheckFile(string bookName)
+    {
+        //우선 checkBook의 값을 참으로
+        bool checkBook = true;
+
+        //bookName이 tm_full을 포함했을 경우
+        if (bookName.Contains("tm_full"))
+        {
+            //반복문 400회 실시
+            for (int i = 0; i < 400; i++)
+            {
+                //aDSL의 i번째 tagmeTargets가 아무것도 존재하지 않을 경우
+                if (!aDSL.tagmeTargets[i].Equals(string.Empty))
+                {
+                    //videoPath를 다음과 같이 설정
+                    string videoPath = string.Format("{0}/video/{1}.mp4", Application.persistentDataPath, aDSL.tagmeTargets[i]);
+
+                    //audioFolder에 st를 넣어 반복문 실행
+                    foreach (string st in audioFolder)
+                    {
+                        //audioPath를 다음과 같이 설정
+                        string audioPath = string.Format("{0}/audio/{1}/{2}.mp3", Application.persistentDataPath, st, aDSL.tagmeTargets[i]);
+
+                        //videoPath파일 혹은 audioPath파일에 접근하지 못했을 경우 checkBook의 값을 거짓으로 하고 반복문 탈출
+                        if (!File.Exists(videoPath) || !File.Exists(audioPath))
+                        {
+                            checkBook = false;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            //assetExit의 값을 우선 참으로
+            bool assetExist = true;
+            //4회 반복문 실시
+            for (int i = 0; i < 4; i++)
+            {
+                //assetCheck의 값은 아래 경로에 파일이 있나 없나를 판단하여 참/거짓을 나눔
+                bool assetCheck = File.Exists(string.Format("{0}/asset/tagme3d_new_book{1}", Application.persistentDataPath, i));
+                //assetExist 본인과 assetCheck가 참일 경우 assetExist를 참으로
+                assetExist = assetExist && assetCheck;
+            }
+
+            //checkBook과 assetExist의 값이 모두 참일 경우
+            if (checkBook && assetExist)
+            {
+                //aDSL의 check 값이 거짓일 경우
+                if (!aDSL.check)
+                {
+                    //canvasManager의 bookPanel을 활성화 시키고, 그 안에 있는 PanelMovingController의 TouchOn함수를 실행(==터치활성화)
+                    canvasManager.bookPanel.SetActive(true);
+                    canvasManager.bookPanel.GetComponentInChildren<PanelMovingController>().TouchOn();
+
+                    //CreateBlocker();
+                    //StartCoroutine(TargetDataSetting("TagMe3D_New_Full"));
+                }
+            }
+            //checkBook과 assetExist의 값이 모두 참이 아닐경우
+            else
+            {
+                //canvasManager의 bookPanel을 활성화 시키고, 그 안에 있는 PanelMovingController의 TouchOn함수를 실행(==터치활성화)
+                canvasManager.bookPanel.SetActive(true);
+                canvasManager.bookPanel.GetComponentInChildren<PanelMovingController>().TouchOn();
+                //OnClickYes("TagMe3D_New_Full");
+            }
+        }
+        //bookName이 tm_full을 포함하지 못했을 경우
+        else
+        {
+            //bookNum은 bookName의 마지막 문자를 int형으로 컨버트 한 것으로 선언
+            int bookNum = Convert.ToInt32(bookName.Substring(bookName.Length - 1));
+            //savedDataSet의 값을 아래와 같이 선언
+            savedDataSet = string.Format("TagMe3D_New_Book{0}", bookNum);
+
+            //100번 반복(0~99, 100~199, 200~299, 300~399)
+            for (int i = (bookNum - 1) * 100; i < bookNum * 100; i++)
+            {
+                //aDSL의 i번째 tagmeTargets가 비어있지 않을 경우
+                if (!aDSL.tagmeTargets[i].Equals(string.Empty))
+                {
+                    //videoPath의 값을 아래와 같이 설정
+                    string videoPath = string.Format("{0}/video/{1}.mp4", Application.persistentDataPath, aDSL.tagmeTargets[i]);
+
+                    //audioFolder에 st를 넣어 반복문 진행
+                    foreach (string st in audioFolder)
+                    {
+                        //audioPath의 값을 아래와 같이 선언
+                        string audioPath = string.Format("{0}/audio/{1}/{2}.mp3", Application.persistentDataPath, st, aDSL.tagmeTargets[i]);
+
+                        //videoPath 혹은 audioPath가 존재하지 않을 경우 checkBook를 거짓으로하고 반복문 종료
+                        if (!File.Exists(videoPath) || !File.Exists(audioPath))
+                        {
+                            checkBook = false;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            //assetExist의 값은 아래 경로에 해당하는 파일의 존재여부에 따라 참/거짓이 나뉨
+            bool assetExist = File.Exists(string.Format("{0}/asset/tagme3d_new_book{1}", Application.persistentDataPath, bookNum));
+
+            //checkBook과 assetExist의 값이 모두 참일경우
+            if (checkBook && assetExist)
+            {
+                //canvasManager의 bookPanel을 활성화 시키고, 그 안에 있는 PanelMovingController의 TouchOn함수를 실행(==터치활성화)
+                canvasManager.bookPanel.SetActive(true);
+                canvasManager.bookPanel.GetComponentInChildren<PanelMovingController>().TouchOn();
+
+                //CreateBlocker함수를 실행
+                CreateBlocker();
+                //TargetDataSetting함수에 아래의 값을 넣어 코루틴으로 실행
+                StartCoroutine(TargetDataSetting(string.Format("TagMe3D_New_Book{0}", bookNum)));
+            }
+            //위 경우가 아닐때
+            else
+            {
+                //canvasManager의 bookPanel을 활성화 시키고, 그 안에 있는 PanelMovingController의 TouchOn함수를 실행(==터치활성화)
+                canvasManager.bookPanel.SetActive(true);
+                canvasManager.bookPanel.GetComponentInChildren<PanelMovingController>().TouchOn();
+                //OnClickYes함수에 아래의 값을 넣어 실행
+                OnClickYes(string.Format("TagMe3D_New_Book{0}", bookNum));
+            }
+        }
+    }
+
+=============================================================================
+
+5. void OnClickYes(string dataSetName)
+    {
+        //ping이 null일 경우
+        if (ping == null)
+        {
+            //localFont는 아래의 리소스를 불러와 설정
+            Font localFont = Resources.Load<Font>(LocalizationManager.GetTermTranslation("UI_font"));
+
+            //assetLoaderText의 텍스트와 폰트를 아래의 값으로 설정
+            assetLoaderText.text = LocalizationManager.GetTermTranslation("UI_downCheckPing");
+            assetLoaderText.font = localFont;
+
+            //pingWaitEllap의 값을 0으로
+            pingWaitEllap = 0;
+
+            //ping은 url을 넣어 WWW로 선언
+            ping = new WWW(url);
+            //ping = new WWW(pingurl);
+            //savedDataSet를 dataSetName와 동일하게
+            savedDataSet = dataSetName;
+            //mainProgress의 fillAmount값을 0으로
+            mainProgress.fillAmount = 0;
+
+            //intOut의 값을 0으로 선언
+            int intOut = 0;
+            //intOut에 saveDataSet의 마지막 문자를 int형으로바꾸는게 성공했을 경우 bookNumber은 intOut로 선언
+            if (int.TryParse(savedDataSet.Substring(savedDataSet.Length - 1), out intOut))
+            {
+                //
+                bookNumber = intOut;
+            }
+            //실패했을경우 bookNumber은 0으로 선언
+            else
+            {
+                bookNumber = 0;
+            }
+
+            //CreateBlocker 함수 실행
+            CreateBlocker();
+        }
+    }
+
+=============================================================================
+
+6. void ActiveWindow(string st)
+    {
+        //canvasManager의 tostMsgPanel을 한번 껐다 켬
+        canvasManager.toastMsgPanel.SetActive(false);
+        canvasManager.toastMsgPanel.SetActive(true);
+        //canvasManager의 tostMsgPanel의 TostMsgManager 컴포넌트의 ToastMessage 함수에 아래의 값을 넣어 실행
+        canvasManager.toastMsgPanel.GetComponent<ToastMsgManager>().ToastMessage(st, string.Empty, false);
+    }
+
+=============================================================================
+
+7. void CreateBlocker()
+    {
+        //blocker가 null이 아닐 경우 blocker을 없앤다(존재하면 지운다)
+        if (blocker != null)
+            Destroy(blocker);
+        //blocker을 아래의 인자를 넣어 새로 선언
+        blocker = new GameObject("blocker", typeof(Image), typeof(Button));
+        //block의 부모를 canvasManager의 bookPanel로 옮긴다
+        blocker.transform.parent = canvasManager.bookPanel.transform;
+        //rect를 새 RectTransform으로 선언
+        RectTransform rect = blocker.GetComponent<RectTransform>();
+        //rect의 앵커 최소 최댓값을 아래에 맞게 선언
+        rect.anchorMin = new Vector2(0, 0);
+        rect.anchorMax = new Vector2(1, 1);
+        //rect의 앵커된 포지선의 값을 0,0,0으로 선언
+        rect.anchoredPosition3D = new Vector3(0, 0, 0);
+        //rect의 로컬스케일을 1,1,1로 선언
+        rect.localScale = new Vector3(1, 1, 1);
+        image는 blocker의 컴포넌트를 가져와 선언
+        Image image = blocker.GetComponent<Image>();
+        image.color = Color.clear;
+        //button은 blocker의 컴포넌트를 가져와 선언
+        Button button = blocker.GetComponent<Button>();
+        //button의 트랜지션을 아래와 같이 선언
+        button.transition = Selectable.Transition.None;
+        //button의 onClick의 RemoveAllListeners 함수를 실행(리스너 제거)
+        button.onClick.RemoveAllListeners();
+        //button의 리스너를 람다식으로 아래와 같이 선언
+        button.onClick.AddListener(() => ActiveWindow("downWait"));
+    }
+
+=============================================================================
+
+//다운로드 강제종료 함수
+8. void ForceQuitDownload(bool window)
+    {
+        //모든 코루틴을 멈춤
+        StopAllCoroutines();
+        //assetLoaderText의 텍스트를 비움
+        assetLoaderText.text = string.Empty;
+
+        //blocker가 null이 아닐 경우 없앰
+        if (blocker != null)
+        {
+            Destroy(blocker);
+        }
+
+        .//downPing가 null이 아닐 경우 null로 변경
+        if (downPing != null)
+        {
+            downPing = null;
+        }
+
+        //window의 값이 참일 경우 ActiveWindow함수에 connectFail을 넣어 실행
+        if (window)
+            ActiveWindow("connectFail");
+        //window의 값이 거짓일 경우 ActiveWindow함수에 downFileError을 넣어 실행
+        else
+            ActiveWindow("downFileError");
+
+        //mainProgress의 fillAmount 값을 0으로
+        mainProgress.fillAmount = 0;
+        //dwonSpeedText의 부모 오브젝트를 비활성화
+        downSpeedText.transform.parent.gameObject.SetActive(false);
+        //savedDataSet의 값을 비움
+        savedDataSet = string.Empty;
+
+        //downloadInProgress의 값을 거짓으로
+        downloadInProgress = false;
+    }
+
+
+=============================================================================
+
+//다운로드를 할 때 돌아가는 코루틴
+9. IEnumerator Download(string dataSetName)
+    {
+        //downloadInProgress의 값을 참으로
+        downloadInProgress = true;
+        fileList의 Clear함수를 실행(fileList를 비움)
+        fileList.Clear();
+
+        //progressString를 선언
+        string progressString;
+        savedDataSet의 값을 dataSetName로 선언
+        savedDataSet = dataSetName;
+
+        //downPing을 url을 넣어 새 WWW로 선언
+        downPing = new WWW(url);
+        //downPing = new WWW(pingurl);
+
+        //bookDownloadGO의 7번째 자식오브젝트를 비활성화
+        bookDownloadGO.transform.GetChild(6).gameObject.SetActive(false);
+
+        //downSpeedText의 부모오브젝트를 활성화 시키고, downSpeedText 본인은 비활성화
+        downSpeedText.transform.parent.gameObject.SetActive(true);
+        downSpeedText.gameObject.SetActive(false);
+
+
+        //____________ Check Server Files
+        //assetLoaderText의 텍스트를 아래와 같이 선언
+        assetLoaderText.text = LocalizationManager.GetTermTranslation("UI_downFileCheck");
+
+        totalSize = 0;
+
+        //checkInfo의 값을 우선 거짓으로
+        bool checkInfo = false;
+
+        //Download_Information함수를 아래의 값을 넣어 람다식 코루틴으로 진행
+        StartCoroutine(Download_Information(dataSetName.ToLower(), output =>
+        {
+            checkInfo = true;
+        }));
+
+        //checkInfo의 값이 거짓일동안 반복
+        while (!checkInfo)
+        {
+            //해당 프레임이 끝날 때 까지 기다림
+            yield return new WaitForEndOfFrame();
+        }
+
+        //fileList의 숫자만큼 반복
+        for (int i = 0; i < fileList.Count; i++)
+        {
+            totalSize의 값에 i번째 fileList를 더함
+            totalSize += fileList[i].size;
+        }
+
+
+        //____________ Download Start
+        //progressString을 아래와 같이 선언
+        progressString = LocalizationManager.GetTermTranslation("UI_downloading");
+        //assetLoaderText의 text를 아래와 같이 변경
+        assetLoaderText.text = string.Format("{0}...", progressString);
+
+        //downSpeedText를 활성화 시킴
+        downSpeedText.gameObject.SetActive(true);
+
+        //checkDown을 거짓으로 선언
+        bool checkDown = false;
+
+        //Download_Data함수를 아래의 값을 넣어 람다식 코루틴으로 진행
+        StartCoroutine(Download_Data(dataSetName.ToLower(), output =>
+        {
+            checkDown = true;
+        }));
+
+        //checkDown이 거짓일 동안
+        while (!checkDown)
+        {
+            //currentSize의 값을 0으로
+            long currentSize = 0;
+
+            //fileList의 숫자만큼 반복문
+            for (int i = 0; i < fileList.Count; i++)
+            {
+                //currentSize에 i번째 fileList의 사이즈를 더함
+                currentSize += fileList[i].size;
+            }
+
+            //timerSpeedEllap의 값이 timerSpeed 미만이라면
+            if (timerSpeedEllap < timerSpeed)
+            {
+                //timerSpeedEllap의 값에 Time.deltaTime을 더함
+                timerSpeedEllap += Time.deltaTime;
+                //speed의 값에 (lastSize - currentSize)값을 더함
+                speed += (lastSize - currentSize);
+            }
+            //timerSpeedEllap의 값이 timerSpeed 미만이 아니라면
+            else
+            {
+                //speedMultiplier의 값을 아래와 같이 선언
+                float speedMultiplier = 1 / timerSpeed;
+                //speed의 값에 speedMultiplier 값을 곱함
+                speed *= speedMultiplier;
+
+                //timerSpeedEllap의 값을 0으로
+                timerSpeedEllap = 0;
+                speed가 0이하일 때 downSpeedText의 텍스트를 Unpredictable로
+                if (speed <= 0)
+                {
+                    downSpeedText.text = "Unpredictable";
+                }
+                //이후 속도의 값에 따라 텍스트를 아래와 같이 변경
+                else if (speed < 1024)
+                {
+                    downSpeedText.text = string.Format("{0}/Bps", speed.ToString("####"));
+                }
+                else if (speed < 1048576)
+                {
+                    downSpeedText.text = string.Format("{0}/Kbps", (speed / 1024).ToString("####.#"));
+                }
+                else
+                {
+                    downSpeedText.text = string.Format("{0}/Mbps", (speed / 1048576).ToString("####.#"));
+                }
+                //speed의 값을 0으로
+                speed = 0;
+            }
+
+            //lastSize의 값을 currentSize로
+            lastSize = currentSize;
+
+            //mainProgress의 fillAmount 값을 아래와 같이
+            mainProgress.fillAmount = (float)(totalSize - currentSize) / totalSize;
+            //assetLoaderText의 텍스트를 아래와같이
+            assetLoaderText.text = string.Format("{0}...   {1:00.0}%", progressString, ((float)(totalSize - currentSize) / totalSize) * 100);
+
+            //끝나는 프레임까지 기다렸다가 리턴
+            yield return new WaitForEndOfFrame();
+        }
+        //downSpeedText를 비활성화
+        downSpeedText.gameObject.SetActive(false);
+
+        //끝나는 프레임까지 기다렸다가 리턴
+        yield return new WaitForEndOfFrame();
+
+
+        //____________ Download File Extraction
+        //checkExtract의 값을 거짓으로
+        bool checkExtract = false;
+
+        Download_Extract 함수에 아래의 값을 넣어 람다 식 코루틴으로 실행
+        StartCoroutine(Download_Extract(dataSetName.ToLower(), output =>
+        {
+            checkExtract = true;
+        }));
+
+        //checkExtract가 거짓일 동안 끝나는 프레임까지 기다렸다가 리턴
+        while (!checkExtract)
+        {
+            yield return new WaitForEndOfFrame();
+        }
+
+
+        //dwonSpeedText의 부모 오브젝트를 비활성화 후 assetLoaderText의 텍스트를 비우고 디버그를 찍음
+        downSpeedText.transform.parent.gameObject.SetActive(false);
+        assetLoaderText.text = string.Empty;
+
+        Debug.Log("Total downloaded file Size : " + totalSize);
+
+        
+        //totalSize가 0이 아닐 경우 TargetDataSetting 함수에 dataSetName을 넣어 코루틴으로 실행
+        if (!totalSize.Equals(0))
+        {
+            StartCoroutine(TargetDataSetting(dataSetName));
+        }
+        //0일 경우 ForceQuitDownload 함수에 거짓을 넣어 실행
+        else
+        {
+            ForceQuitDownload(false);
+        }
+
+        //saveddataSet의 값을 비우고 downloadInProgress의 값을 거짓으로
+        savedDataSet = string.Empty;
+        downloadInProgress = false;
+
+        yield return null;
+    }
+
+=============================================================================
+
+//타겟데이터에 오브젝트를 달아주는 함수
+10. IEnumerator TargetDataSetting(string dataSetName)
+    {
+        //PrefabShelter가 달려있는 오브젝트를 찾아 선언
+        PrefabShelter prefabShelter = FindObjectOfType<PrefabShelter>();
+
+        //dataSetName이 TagMe3D_New_Full와 같을때
+        if (dataSetName.Equals("TagMe3D_New_Full"))
+        {
+            //aDSL의 tagmeDataSets는 새 List로 선언
+            aDSL.tagmeDataSets = new List<string>();
+
+            //4번 반복문
+            for (int j = 0; j < 4; j++)
+            {
+                //bookNum은 j+1로 선언(1~4)
+                int bookNum = j + 1;
+
+                //assetLoaderText의 텍스트를 아래와 같이 설정
+                assetLoaderText.text = LocalizationManager.GetTermTranslation("UI_downSetPrefab").Replace("*", bookNum.ToString());
+                //prefabProgress를 bookDounloadGO의 1~4번째 자식의 0번째 자식의 이미지로 설정
+                Image prefabProgress = bookDownloadGO.transform.GetChild(bookNum + 1).GetChild(0).GetComponent<Image>();
+                //prefabProgress.gameObject.SetActive(true);
+                //prefabProgress의 fillAmount를 1로 설정
+                prefabProgress.fillAmount = 1;
+
+//unity에디터냐 안드로이드냐에 따라 path의 값을 아래와 같이 선언
+#if UNITY_EDITOR
+                string path = string.Format("file:///{0}/asset/tagme3d_new_book{1}", Application.persistentDataPath, bookNum);
+#elif UNITY_ANDROID
+                string path = string.Format("file://{0}/asset/tagme3d_new_book{1}", Application.persistentDataPath, bookNum);
+#endif
+
+                //webr의 값을 아래와 같이 선언하여 Send 함수를 실행
+                UnityWebRequest webr = UnityWebRequestAssetBundle.GetAssetBundle(path);
+                webr.Send();
+
+                //webr이 끝나지 않았을 경우 끝나는 프레임까지 기다렸다 리턴하는 것을 반복
+                while (!webr.isDone)
+                    yield return new WaitForEndOfFrame();
+
+                //bundles는 DownloadHandlerAssetBundle의 GetContent 함수에 webr을 넣어 실행(==webr의 컨텐트를 가져옴)
+                AssetBundle bundles = DownloadHandlerAssetBundle.GetContent(webr);
+
+                //100번 반복문
+                for (int i = 0; i < 100; i++)
+                {
+                    //targetNum을 아래와 같이 설정
+                    int targetNum = ((bookNum - 1) * 100) + i;
+
+                    //aDSL의 targetNum번째 tagmeTargets가 비어있지 않은 경우
+                    if (!aDSL.tagmeTargets[targetNum].Equals(string.Empty))
+                    {
+                        //req를 다음과 같이 선언
+                        AssetBundleRequest req = bundles.LoadAssetAsync<GameObject>(aDSL.tagmeTargets[targetNum]);
+                        //prefabShelter의 targetNum번째 tmModel은 아래의 값을 넣어 새 TMModel로 선언
+                        prefabShelter.tmModel[targetNum] = new TMModel((GameObject)req.asset, false);
+                    }
+                    //aDSL의 targetNum번째 tagmeTargets가 비어있는 경우 prefabShelter의 targetNum번째 tmModel은 아래의 값을 넣어 새 TMModel로 선언
+                    else
+                        prefabShelter.tmModel[targetNum] = new TMModel(null, false);
+
+                    prefabProgress의 fillAmount를 아래의 값으로 변경하여 fillAmount의 작업이 끝날때 까지 기다렸다 리턴
+                    prefabProgress.fillAmount = 1 - ((i + 1f) / 100f);
+                    yield return prefabProgress.fillAmount;
+                }
+                //bundles의 Unload 함수에 거짓을 넣어 실행(bundles를 로드하지 않음)
+                bundles.Unload(false);
+
+                //aDSL의 tagmeDataSets에 아래의 값을 추가한 후 aDSL의 fileExist를 참으로 한다
+                aDSL.tagmeDataSets.Add(string.Format("TagMe3D_New_Book{0}", j + 1));
+                aDSL.fileExist = true;
+            }
+
+            //blocker를 없앤후 로드가 안됐거나 쓰이지 않는 에셋을 지우고, 이 작업이 끝나는 프레임까지 기다렸다 리턴
+            Destroy(blocker);
+            Resources.UnloadUnusedAssets();
+            yield return new WaitForEndOfFrame();
+
+            //canvesManager의 PanelManager 함수에 참을 넣어 실행
+            canvasManager.PanelManager(true);
+            //assetLoaderText의 텍스트를 비운다
+            assetLoaderText.text = string.Empty;
+        }
+        //dataSetName이 TagMe3D_New_Full와 같지 않을 때
+        else
+        {
+            //bookNum을 아래와 같이 선언
+            int bookNum = Convert.ToInt32(dataSetName.Substring(dataSetName.Length - 1, 1));
+
+            //assetLoaderText의 텍스트를 아래와 같이 변경
+            assetLoaderText.text = LocalizationManager.GetTermTranslation("UI_downSetPrefab").Replace("*", bookNum.ToString());
+            prefabProgress는 아래의 값을 가진 것으로 선언
+            Image prefabProgress = bookDownloadGO.transform.GetChild(bookNum + 1).GetChild(0).GetComponent<Image>();
+            //prefabProgress.gameObject.SetActive(true);
+            //prefabProgress의 fillAmount의 값을 1로
+            prefabProgress.fillAmount = 1;
+
+//유니티 에디터냐 안드로이드냐에 따라 path의 값을 아래와 같이 선언
+#if UNITY_EDITOR
+            string path = string.Format("file:///{0}/asset/tagme3d_new_book{1}", Application.persistentDataPath, bookNum);
+#elif UNITY_ANDROID
+            string path = string.Format("file://{0}/asset/tagme3d_new_book{1}", Application.persistentDataPath, bookNum);
+#endif
+
+            //webr은 path의 에셋번들을 가져온것으로 선언하여 Send 함수를 실행
+            UnityWebRequest webr = UnityWebRequestAssetBundle.GetAssetBundle(path);
+            webr.Send();
+
+            //webr의 isDone이 거짓일 경우(webr이 끝나지 않았을 동안) 작업이 끝나는 프레임까지 기다렸다 리턴하는것을 반복
+            while (!webr.isDone)
+                yield return new WaitForEndOfFrame();
+
+            //bundles를 webr의 에셋번들을가져온 것으로 선언
+            AssetBundle bundles = DownloadHandlerAssetBundle.GetContent(webr);
+
+            //100번 반복
+            for (int i = 0; i < 100; i++)
+            {
+                //targetNum을 아래와 같이 선언
+                int targetNum = ((bookNum - 1) * 100) + i;
+
+                //aDSL의 targetNum번째 tagmeTargets의 값이 비어있지 않을 경우
+                if (!aDSL.tagmeTargets[targetNum].Equals(string.Empty))
+                {
+                    //req는 아래와 같이 선언
+                    AssetBundleRequest req = bundles.LoadAssetAsync<GameObject>(aDSL.tagmeTargets[targetNum]);
+                    //prefabShelter의 targetNum번째 tmModel은 아래의 값을 넣어 새 TMModel로 선언
+                    prefabShelter.tmModel[targetNum] = new TMModel((GameObject)req.asset, false);
+                }
+                //비어있을 경우 prefabShelter의 targetNum번째 tmModel은 아래의 값을 넣어 새 TMModel로 선언
+                else
+                    prefabShelter.tmModel[targetNum] = new TMModel(null, false);
+
+                //prefabProgress의 fillAmount의 값을 아래와같이
+                prefabProgress.fillAmount = 1 - ((i + 1f) / 100f);
+                //fillAmount의 작업이 끝날때 까지 기다렸다 리턴
+                yield return prefabProgress.fillAmount;
+            }
+            //bundles의 Unload 함수에 false를 담아 실행(bundles를 로드하지 않음)
+            bundles.Unload(false);
+
+            //checkSet의 값을 거짓으로
+            bool checkSet = false;
+            //aDSL의 tagmeDataSets의 카운트만큼 반복
+            for (int i = 0; i < aDSL.tagmeDataSets.Count; i++)
+            {
+                //aDSL의 tagmeDataSets가 dataSetName과 같다면 checkSet의 값을 ㅁ참으로
+                if (aDSL.tagmeDataSets.Equals(dataSetName))
+                    checkSet = true;
+            }
+
+            //checkSet의 값이 거짓일 경우 aDSL의 tagmeDataSets에 dataSetName를 추가
+            if (!checkSet)
+                aDSL.tagmeDataSets.Add(dataSetName);
+
+            //blocker를 없애고 로드되지 않았거나 쓰이지 않는 에셋을 정리하여 이 작업이 끝날는 프레임까지 기다렸다 리턴한다
+            Destroy(blocker);
+            Resources.UnloadUnusedAssets();
+            yield return new WaitForEndOfFrame();
+
+            //canvasManager의 PanelManager 함수에 참을 넣어 실행하고 assetLoaderText의 텍스트를 비운다
+            canvasManager.PanelManager(true);
+            assetLoaderText.text = string.Empty;
+        }
+    }
+
+=============================================================================
+
+11. IEnumerator Download_Information(string name, Action<bool> output)
+    {
+        //path를 아래와 같이 선언
+        string path = string.Format("{0}{1}.zip", url, name);
+
+        //req를 아래와 같이 선언하여 메소드를 HEAD로 값을 주고 Send함수를 실행
+        UnityWebRequest req = UnityWebRequest.Get(path);
+        req.method = "HEAD";
+        req.Send();
+
+        //req의 isDone이 거짓일경우 끝나는 프레임까지 기다렸다가 리턴하는것을 반복
+        while (!req.isDone)
+        {
+            yield return new WaitForEndOfFrame();
+        }
+
+        //downServerWaitEllap의 값이 0이 아닐동안에 반복
+        while (downServerWaitEllap != 0)
+        {
+            //req의 Aobrt 함수를 실행
+            req.Abort();
+
+            //req는 UnityWebRequset 함수에 req.url을 넣어 리턴되는 값으로 설정하여 Send 함수를 실행
+            req = UnityWebRequest.Get(req.url);
+            req.Send();
+
+            //req의 isDone이 거짓일 동안 끝나는 프레임까지 기다렸다 리턴하는것을 반복
+            while (!req.isDone)
+            {
+                yield return new WaitForEndOfFrame();
+            }
+
+            //끝나는 프레임까지 기다렸다 리턴
+            yield return new WaitForEndOfFrame();
+        }
+
+        //fileSize의 값을 0으로
+        long fileSize = 0;
+        
+        //아래의 조건문 안의 인자가 정수로 변환 될 경우
+        if (long.TryParse(req.GetResponseHeader("Content-Length"), out fileSize))
+        {
+            //디버그를 찍고 fileList에 name과 fileSize를 넣은 새 FileList를 추가
+            Debug.Log("download file size : " + fileSize);
+            fileList.Add(new FileList(name, fileSize));
+        }
+
+        //????????????????????????????????????????????????????????????????????????????????????????
+        output(true);
+
+        yield return null;
+    }
+
+=============================================================================
+
+12. IEnumerator Download_Extract(string name, Action<bool> output)
+    {
+        //zipFile과 loaction을 각각 아래와 같이 선언
+        string zipFile = string.Format("{0}/{1}.zip", Application.persistentDataPath, name);
+        string location = Application.persistentDataPath;
+
+//사용자 환겨에 따라 다른 코드를 이용하여 zip 파일의 압축을 해제
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN || UNITY_STANDALONE_OSX
+        Directory.CreateDirectory(location);
+
+        using (ZipFile zip = ZipFile.Read(zipFile))
+        {
+            zip.ExtractAll(location, ExtractExistingFileAction.OverwriteSilently);
+        }
+
+#elif UNITY_ANDROID
+		using (AndroidJavaClass zipper = new AndroidJavaClass ("com.tsw.zipper")) {
+			zipper.CallStatic ("unzip", zipFile, location);
+		}
+#elif UNITY_IPHONE
+		unzip (zipFile, location);
+#endif
+
+        //????????????????????????????????????????????????????????????????????????????????????????
+        output(true);
+        //zipFile을 제거
+        File.Delete(zipFile);
+
+        yield return null;
+    }
+
+=============================================================================
+
+13. IEnumerator StartCoroutine_Queue(IEnumerator coroutine)
+    {
+        //couritines의 카운트가 coroutineNumber보다 클 동안 반복
+        while (coroutines.Count > coroutineNumber)
+        {
+            /coroutiones의 카운트만큼 반복
+            for (int i = 0; i < coroutines.Count; i++)
+            {
+                //i번째 coroutins가 null일 경우 coroutines의 Remove함수에 i번째 coroutines를 담아 실행(coroutines[i]를 지움)
+                if (coroutines[i] == null)
+                {
+                    coroutines.Remove(coroutines[i]);
+                }
+
+                //i번째 coroutins가 MoveNext함수를 실행한 결과 참일 경우 coroutines의 Remove함수에 i번째 coroutines를 담아 실행(coroutines[i]를 지움)
+                if (!coroutines[i].MoveNext())
+                {
+                    coroutines.Remove(coroutines[i]);
+                }
+            }
+
+            //작업이 끝나는 프레임까지 기다렸다 리턴
+            yield return new WaitForEndOfFrame();
+        }
+
+        //coroutines에 coroutine를 추가하여 coroutine을 코루틴으로 실행
+        coroutines.Add(coroutine);
+        StartCoroutine(coroutine);
+
+        yield return null;
+    }
+
+=============================================================================
+
+14. 기타 클래스
+
+
+-1. public class FileList	//파일리스트 클래스
+{
+    public string name;
+    public long size;
+
+    public FileList(string _name, long _size)
+    {
+        name = _name;
+        size = _size;
+    }
+}
+
+-2. [Serializable]
+public class Exceptions	//예외 클래스
+{
+    public string name;
+    public string type;
+    public int book;
+
+    public Exceptions(string _name, string _type, int _book)
+    {
+        name = _name;
+        type = _type;
+        book = _book;
+    }
+}

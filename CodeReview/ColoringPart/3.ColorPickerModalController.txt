@@ -1,0 +1,32 @@
+개요
+ㄴ페인트통 기능이 활성화 될 때 같이 활성화됨
+ㄴ컬러피커 기능을 사용할 때 컨트롤하는 역할을 함
+ㄴ코드가 짧기 때문에 한번에 설명
+
+=============================================================================
+
+public class ColorPickerModalController : MonoBehaviour, IPointerClickHandler
+    {
+
+        ColoringController coloringController;		//ColoringController 클래스
+
+        //페인트통 기능이 반응 될 때 같이 반응
+        void Awake()
+        {
+            //ColoringController 클래스를 찾아서 선언
+            coloringController = FindObjectOfType<ColoringController>();
+        }
+
+        #region IPointerClickHandler implementation
+
+        //팔레트 오브젝트를 닫을 떄 반응
+        public void OnPointerClick(PointerEventData eventData)
+        {
+            //print ("OnPointerClick");
+            //coloringController의 TogglePalette함수를 실행	(팔레트를 끔)
+            coloringController.TogglePalette();
+
+        }
+
+        #endregion
+    }

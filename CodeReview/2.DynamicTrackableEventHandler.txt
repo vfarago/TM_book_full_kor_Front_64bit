@@ -1,0 +1,250 @@
+개요
+ㄴ TrackableEventHandler를 포함하는 클래스를 갖고있다.
+ㄴ AnimalDataSetLoader를 이용하여 만들어진 target들의 스캔을 관장하는 스크립트
+ㄴ target이 스캔되면 해당 target의 이름에 맞는 object를 생성하여 자식 오브젝트로 붙힘
+ㄴ 반대로 target를 잃어버리면 그 target에 해당하는 obj를 제거함
+
+===================================================================================
+
+1. 변수
+isFreeModel=false(bool)		//프리모델인가 아닌가를 판단, 초기값은 거짓
+targetName(string)			//타겟이름
+isModelLoading(bool)		//모델이 로딩이 되었는가 아닌가 판단
+isEndAR(bool)			//AR기능이 끝났는가 아닌가 판단
+m3dModel(GameObject)		//3d모델링 오브젝트
+
+===================================================================================
+
+2. override void Awake()
+    {
+        //TrackableEventHandler에 있는 Awake를 실행한 후, targetName을 아래와 같이 설정한다.
+        base.Awake();
+        targetName = mTrackableBehaviour.TrackableName.ToLower();
+    }
+
+================아래의 함수들은 모두 private, 즉, 다른 클래스에서 접근할 수는 없다=====================
+
+3.  override void OnTrackingFound() //타겟을 찾았을 경우
+    {
+        //만약 프리 모델일 경우엔
+        if (isFreeModel)
+        {
+            //isEndAR의 값은 prefabLoader의 isEndAR과 같다
+            isEndAR = prefabLoader.isEndAR;
+            //캔버스 매니저의 OnTrackingFound함수를 거짓값을 넣어 실행
+            canvasManager.OnTrackingFound(false);
+
+            //isModelLoading의 값이 거짓이면서 isEndAR의 값이 거짓일 때
+            if (!isModelLoading && !isEndAR)
+            {
+                //Debug.Log("        found " + targetName);
+                //loadModelAsync를 코루틴으로 실행한다
+                StartCoroutine(loadModelAsync());
+                isModelLoading의 값을 참으로
+                isModelLoading = true;
+            }
+        }
+        //프리모델이 아닌 경우엔
+        else
+        {
+            //isExist와 iusConfirm의 값을 거짓으로 선언
+            bool isExist = false;
+            bool isConfirm = false;
+            //prefabShelter의 tmModel의 길이만큼 반복문
+            for (int i = 0; i < prefabShelter.tmModel.Length; i++)
+            {
+                //prefabShelter의 i번째 tmModel이 null이 아니면서 prefabShelter의 i번째 model이 null이 아닐 경우
+                if (prefabShelter.tmModel[i] != null && prefabShelter.tmModel[i].model != null)
+                {
+                    //prefabShelter의 i번째 tmModel의 모델의 이름이 targetName와 같다면
+                    if (prefabShelter.tmModel[i].model.name.Equals(targetName))
+                    {
+                        //isExist의 값을 참으로, isConfirm의 값을 prefabShelter의 i번째 tmModel의 isConfirm의 갑소가 같게한 후 브레이크
+                        isExist = true;
+                        isConfirm = prefabShelter.tmModel[i].isConfirm;
+                        break;
+                    }
+                }
+            }
+
+            //isConfirm의 값이 참일 경우에
+            if (isConfirm)
+            {
+                //isEndAR의 값을 prefibLoaderAR의 값과 같게한다
+                isEndAR = prefabLoader.isEndAR;
+
+                //canvasManager클래스의 OnTrackingFound함수를 거짓 값을 넣어 실행
+                canvasManager.OnTrackingFound(false);
+
+                //isModelLoadingㅗ가 isEndAR의 값이 모두 거짓일 경우
+                if (!isModelLoading && !isEndAR)
+                {
+                    //Debug.Log("        found " + targetName);
+
+                    //loadModelAsync함수를 코루틴으로 실행하고 isModelLoading의 값을 참으로 한다
+                    StartCoroutine(loadModelAsync());
+                    isModelLoading = true;
+                }
+            }
+            //isConfirm의 값이 거짓일 경우 canvasManager클래스의 OnInfoSerial 함수를 isExist값을 넣어 실행한다.(무료페이지 아닌 타겟 인식할 경우)
+            else
+            {
+                canvasManager.OnInfoSerial(isExist);
+            }
+        }
+    }
+
+===================================================================================
+
+4. override void OnTrackingLost() //타겟을 잃었을 경우
+    {
+        isModelLoading이 참이면서 prefabLoader의 isTargetoff의 값이 거짓일 경우
+        if (isModelLoading && !prefabLoader.isTargetoff)
+        {
+            //Debug.Log("        lost " + targetName);
+
+            //m3dModel을 없앤 후 m3dModel의 값을 null로 한 후 isModelLoading의 값을 거짓으로 한다
+            Destroy(m3dModel);
+            m3dModel = null;
+
+            isModelLoading = false;
+        }
+    }
+
+===================================================================================
+
+5. private IEnumerator loadModelAsync() //해당 모델을 불러오는 코루틴
+    {
+        //prefabLoader의 isTargetoff의 값이 참일 경우 prefabLoader의 DestroyObj함수를 실행하여 끝날 때 까지 기다린 후 리턴
+        if (prefabLoader.isTargetoff)
+            yield return prefabLoader.DestroyObj();
+
+        m3dModel이 null이면서 isEndAR의 값이 거짓일 경우
+        if (m3dModel == null && !isEndAR)
+        {
+            //프리모델의 경우
+            if (isFreeModel)
+            {
+                //go는 다음과 같이 선언하여 m3dModel에 클론을 만든다
+                GameObject go = Resources.Load<GameObject>(string.Format("objects/{0}", targetName));
+                m3dModel = Instantiate(go, transform, false);
+            }
+            //프리모델이 아닐경우
+            else
+            {
+                //prefabShelter의 tmModel의 길이만큼 반복문을 돌린다
+                for (int i = 0; i < prefabShelter.tmModel.Length; i++)
+                {
+                    //prefabShelter의 i번째 tmModel이 null이 아니면서 prefabShelter의 i번째 tmModel의 model이 null이 아닐 경우
+                    if (prefabShelter.tmModel[i] != null && prefabShelter.tmModel[i].model != null)
+                    {
+                        //prefabShelter의 i번째 tmModel의 model이름이 targetName일 경우
+                        if (prefabShelter.tmModel[i].model.name.Equals(targetName))
+                        {
+                            m3dModel에 해당 모델을 클론화 한 후 브레이크
+                            m3dModel = Instantiate(prefabShelter.tmModel[i].model, transform, false);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            //m3dModel이 null이 아닐 경우
+            if (m3dModel != null)
+            {
+                m3dModel의 태그를 아래와 같이 선언
+                m3dModel.tag = "augmentation";
+
+                m3dModel의 로테이션을 아래와 같이 선언
+                m3dModel.transform.Rotate(0, 270, -90, Space.Self); // side  10.18.2017
+
+                //이후 RepositionAugmentation함수(항목 6.)에 0.3f를 넣어 코루틴으로 실행한다
+                StartCoroutine(RepositionAugmentation(0.3f));
+
+                //m3dModel이 완성될 때 까지 기다렸다가 리턴
+                yield return m3dModel;
+
+                //m3dModel이 null이 아닐 경우
+                if (m3dModel != null)
+                {
+                    //m3dModel에 TapGesture 컴포넌트를 추가 후
+                    // NumberOfTapsRequired와 TimeLimit를 1로 설정
+                    //gestures  [start]
+                    TapGesture tagGesture = m3dModel.AddComponent<TapGesture>();
+                    tagGesture.NumberOfTapsRequired = 1;
+                    tagGesture.TimeLimit = 1;
+
+                    //m3dModel에 ScaleGesture 컴포넌트와 PanGesture 컴포넌트를 추가한 후
+                    ScaleGesture scaleGesture = m3dModel.AddComponent<ScaleGesture>();
+                    PanGesture panGesture = m3dModel.AddComponent<PanGesture>();
+
+                    //해당 컴포넌트들의 AddFriendlyGesture 함수를 해당 컴포넌트를 넣어 실행한다
+                    scaleGesture.AddFriendlyGesture(panGesture);
+                    panGesture.AddFriendlyGesture(scaleGesture);
+
+                    //m3dModel에 TSGestureHandler 컴포넌트를 추가하여
+                    //컴포넌트에 필요한 변소들을 아래와 같이 선언한다
+                    TSGestureHandler gestureHandler = m3dModel.AddComponent<TSGestureHandler>();
+                    gestureHandler.mTrackableBehaviour = mTrackableBehaviour;
+                    gestureHandler.targetName = targetName;
+                    gestureHandler.isFreeModel = isFreeModel;
+                    gestureHandler.enabled = true;
+                    //gesture [end]
+                }
+            }
+        }
+    }
+
+===================================================================================
+
+6. private IEnumerator RepositionAugmentation(float time) //5. 항목에서 실행되는 코루틴, 인자로 float를 가져온다
+    {
+        //initialScale라는 float 선언
+        float initialScale;
+        //m3dModel의 하위항목에 MeshRenderer 컴포넌트가 포함됐을 경우
+        if (m3dModel.GetComponentInChildren<MeshRenderer>())
+        {
+            //m3dModel의 MeshRenderer 컴포넌트를 활성화 해준 후, initialScale의 값을 0.3으로 선언
+            m3dModel.GetComponentInChildren<MeshRenderer>().enabled = true;
+            initialScale = 0.5f;
+        }
+        //m3dModel의 하위항목에 MeshRenderer 컴포넌트가 포함되지 않았을 경우
+        else
+        {
+            //m3dModel의 SkinnedMeshRenderer 컴포넌트를 활성화 해준 후, initialScale의 값을 0.5으로 선언
+            m3dModel.GetComponentInChildren<SkinnedMeshRenderer>().enabled = true;
+            initialScale = 0.3f;
+        }
+
+       //transform의 localScale의 x값이 500을 초과했을 경우 initialScale의 값을 0.5 곱한다( /2를 한다)
+        if (transform.localScale.x > 500)
+            initialScale *= 0.5f;
+
+        //m3dModel에 BoxCollider를 추가하여 그 사이즈를 2,2,2로 설정한다
+        m3dModel.AddComponent<BoxCollider>().size = new Vector3(2, 2, 2);
+
+        //아래의 벡터들을 선언하여준다
+        Vector3 startScaling = new Vector3(0.01f, 0.01f, 0.01f);
+        Vector3 newScaling = new Vector3(initialScale, initialScale, initialScale);
+
+        //Object Reflect
+        if (arManager.isFrontCamera)	//arManager의 isFrontCamera가 참일 경우(전면 카메라가 활성화 돼 있을 경우) z값을 음수로 해 준다
+            newScaling = new Vector3(initialScale, initialScale, initialScale * -1f);
+
+        //lerping
+        float elapsedTime = 0;
+        while (elapsedTime < time)	//elapsedTime을 0으로 선언한 후 elapsedTime의 값이 time 미만일 경우 반복한다
+        {
+            if (m3dModel == null)	//m3dModel이 null일 경우 브레이크
+                break;
+
+            //m3dModel의 localScale을 아래와 같이 설정한 후 elapsedTime의 값을 Time.deltaTime만큼 더해준다
+            m3dModel.transform.localScale = Vector3.Lerp(startScaling, newScaling, (elapsedTime / time));
+            elapsedTime += Time.deltaTime;
+            yield return null;
+        }
+        if (m3dModel != null)		//m3dModel이 null이 아닐 경우 m3dModel의 localScale를 newScaling으로 설정한다
+            m3dModel.transform.localScale = newScaling;
+
+        yield return m3dModel;	//m3dModel이 완료될 때 까지 기다렸다 리턴한다.
+    }

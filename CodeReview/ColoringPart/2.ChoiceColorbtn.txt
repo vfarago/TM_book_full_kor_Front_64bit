@@ -1,0 +1,50 @@
+개요
+ㄴ컬러 선택 버튼 리스너
+ㄴ반응시 컬러피커의 기능을 가져온다
+ㄴ코드 자체가 짧기 때문에 한번에 정리
+ㄴ페인트통 버튼과 그안에 저장되어있는 컬러들에 대한 반응
+=============================================================================
+
+public class ChoiceColorBtn : MonoBehaviour
+{
+    public ColorPicker picker;					//ColorPicker 클래스
+
+    private Button[] colorBtns;					//Button을 배열로 선언
+
+    //페인트통 버튼 클릭시 반응
+    private void OnEnable()
+    {
+        //Button 컴포넌트가 달려있는 자식 오브젝트들을 가져옴
+        colorBtns = GetComponentsInChildren<Button>();
+        //colorBtns의 길이만큼 반복
+        for (int i = 0; i < colorBtns.Length; i++)
+        {
+            //colorBtn은 i번째 colorBtns로 선언
+            Button colorBtn = colorBtns[i];
+            //colorBtn에 람다 식으로 리스너를 달아줌
+            colorBtn.onClick.AddListener(() => ChoiceColor(colorBtn));
+        }
+    }
+
+    //페인트통 기능 닫을 때 반응
+    private void OnDisable()
+    {
+        //colorBtns의 길이만큼 반복
+        for (int i = 0; i < colorBtns.Length; i++)
+        {
+            //colorBtn은 i번째 colorBtns로 선언
+            Button colorBtn = colorBtns[i];
+            //colorBtn의 모든 리스너를 제거
+            colorBtn.onClick.RemoveAllListeners();
+        }
+    }
+
+    //저장되어있는 컬러를 불러올때 반응
+    private void ChoiceColor(Button colorBtn)
+    {
+        //clr은 colorBtn의 Image컴포넌트를 가져와 그 컬러로 선언
+        Color clr = colorBtn.GetComponent<Image>().color;
+        //picker의 CurrentColor을 clr로 선언
+        picker.CurrentColor = clr;
+    }
+}

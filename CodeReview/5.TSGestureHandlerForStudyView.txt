@@ -1,0 +1,193 @@
+개요
+ㄴ기본적인 기능은 TSGestureHandler와 비슷하나 Phonics 파트에서 사용되는 오브젝트를 제어하는 함수
+
+===================================================================================
+
+1. 변수
+minScale = 0.05f(readonly float)	//최소 스케일(단, 읽기 전용이 되므로 값 변경이 불가능)
+maxScale = 2.5f(readonly float)	//최대 스케일(단, 읽기 전용이 되므로 값 변경이 불가능)
+initialRot(Vector3)			//오브젝트 로테이션 저장용 벡터
+can(CanvasManager)		//캔버스 매니저 클래스
+
+===================================================================================
+
+2. void Start()
+    {
+        //can에 CanvasManager를 달아준다
+        can = FindObjectOfType<CanvasManager>();
+        //initialRot에 이 오브젝트의 로컬 각도를 선언해준다
+        initialRot = transform.localEulerAngles;
+    }
+
+===================================================================================
+
+//활성화 되거나 활성화 되지 않았을 때 해당 값들을 더하거나 뺀다. (탭 횟수, 스케일, 회전 등)
+
+3. void OnEnable()
+    {
+        if (GetComponent<TapGesture>() != null)
+        {
+            GetComponent<TapGesture>().Tapped += TappedHandler;
+        }
+        if (GetComponent<ScaleGesture>() != null)
+        {
+            GetComponent<ScaleGesture>().StateChanged += OnScaleStateChanged;
+        }
+        if (GetComponent<PanGesture>() != null)
+        {
+            GetComponent<PanGesture>().StateChanged += OnPanStateChanged;
+        }
+    }
+
+3-1. void OnDisable()
+    {
+        if (GetComponent<TapGesture>() != null)
+        {
+            GetComponent<TapGesture>().Tapped -= TappedHandler;
+        }
+        if (GetComponent<ScaleGesture>() != null)
+        {
+            GetComponent<ScaleGesture>().StateChanged -= OnScaleStateChanged;
+        }
+        if (GetComponent<PanGesture>() != null)
+        {
+            GetComponent<PanGesture>().StateChanged -= OnPanStateChanged;
+        }
+    }
+
+===================================================================================
+
+//인자가 두개 존재하나 사용되지 않음
+
+4. void TappedHandler(object sender, EventArgs e)
+    {
+        RepositionAugmentation 함수에 0.5f를 넣어 코루틴으로 실행
+        StartCoroutine(RepositionAugmentation(0.5f));
+    }
+
+===================================================================================
+
+5. void OnPanStateChanged(object sender, GestureStateChangeEventArgs e)
+    {
+        //if (!Enabled)
+        //{
+        //    return;
+        //}
+        //can의 isToastOn이 거짓일 경우
+        if (!can.isToastOn)
+        {
+            //e의 State값에 따라 사용하는 방법을 나눔
+            switch (e.State)
+            {
+                //e의 값이 Gesture.GestureState.Began 혹은 Gesture.GestureState.Changed일 경우
+                case Gesture.GestureState.Began:
+                case Gesture.GestureState.Changed:
+
+                    //2nd attempt
+                    //아무개 gesture는 sender를 PanGesture로 강제 형변환 하여 선언 
+                    var gesture = (PanGesture)sender;
+
+                    //gestures의 WorldDeltaPosition이 Vector3.zero(0,0,0)이 아닐 경우
+                    if (gesture.WorldDeltaPosition != Vector3.zero)
+                    {
+                        //gesture의 WorldDeltaPosition의 x가 WorldDeltaPosition의 z보다 클 경우
+                        if (Math.Abs(gesture.WorldDeltaPosition.x) > Math.Abs(gesture.WorldDeltaPosition.z))
+                        {//horizontal
+                            //이 오브젝트의 로테이션을 다음과 같이 설정한다
+                            this.transform.Rotate(0, 0, -gesture.WorldDeltaPosition.x * 200, Space.World);
+                        }
+                        //gesture의 WorldDeltaPosition의 x가 WorldDeltaPosition의 z보다 작거나 같을 경우
+                        else
+                        {
+                            //					transform.Rotate( gesture.WorldDeltaPosition.z, 0, 0, Space.World);
+                            //이 오브젝트의 로테이션을 다음과 같이 설정한다
+                            this.transform.Rotate(gesture.WorldDeltaPosition.z * 200, 0, 0, Space.World);
+                        }
+                    }
+
+                    break;
+            }
+        }
+    }
+
+===================================================================================
+
+6. void OnScaleStateChanged(object sender, GestureStateChangeEventArgs e)
+    {
+        //if (!Enabled)
+        //{
+        //    return;
+        //}
+
+        //e의 State값에 따라 사용하는 방법을 나눔
+        switch (e.State)
+        {
+            //e의 State값이 Gesture.GestureState.Began 혹은 Gesture.GestureState.Changed일 경우
+            case Gesture.GestureState.Began:
+            case Gesture.GestureState.Changed:
+
+                아무개 gesture는 sender를 ScaleGesture로 강제 형변환 한 것으로 선언
+                var gesture = (ScaleGesture)sender;
+                localdeltaScale의 값은 gesture의 LocalDeltaScale로 선언
+                float localDeltaScale = gesture.LocalDeltaScale;
+
+                objectScale의 값을 이 오브젝트의 로컬스케일의 x값으로 선언
+                float objectScale = transform.localScale.x;
+
+                //scaling
+                //currentScale의 값을 이 오브젝트의 로컬스케일의 x값으로 선언
+                float currentScale = transform.localScale.x;
+                //localDeltaScale의 값이 1.0보다 크거나 같을 경우 currentScale의 값을 아래와 같이 세팅
+                if (localDeltaScale >= 1f)
+                    currentScale *= (1 + (objectScale * 0.05f));
+                //localDeltaScale의 값이 1.0보다 작을 경우 currentScale의 값을 아래와 같이 세팅
+                else
+                    currentScale *= (1 - (objectScale * 0.05f));
+
+                //currentScale의 값을 minScale미만이거나 maxScale초과 되지 않는 값으로 하여
+                currentScale = Mathf.Clamp(currentScale, minScale, maxScale);
+                //이 오브젝트의 loaclScale을 아래와 같이 선언한다
+                transform.localScale = new Vector3(currentScale, currentScale, currentScale);
+
+
+                break;
+        }
+    }
+
+===================================================================================
+
+//포지션을 다시 잡는 코루틴용 함수
+
+7. IEnumerator RepositionAugmentation(float time)
+    {
+        //rotation 
+        //startRotation과 newRotation의 값을 아래와 같이 설정
+        Vector3 startRotation = transform.localEulerAngles;
+        Vector3 newRotation = initialRot;
+
+        //scaling
+        //startScaling과 newScaling의 값을 아래와 같이 설정
+        Vector3 startScaling = transform.localScale;
+        Vector3 newScaling = new Vector3(1, 1, 1);
+
+        //lerping
+        //elapsedTime의 값을 0으로 설정
+        float elapsedTime = 0;
+        //elapsedTime이 time보다 작을 동안 반복한다
+        while (elapsedTime < time)
+        {
+            //이 오브젝트의 각도를 아래와 같이 설정
+            transform.localEulerAngles = Vector3.Lerp(startRotation, newRotation, (elapsedTime / time));
+            //이 오브젝트의 로컬스케일을 아래와 같이 설정
+            transform.localScale = Vector3.Lerp(startScaling, newScaling, (elapsedTime / time));
+            //elapsedTime의 값에 Time.deltaTime를 더한다
+            elapsedTime += Time.deltaTime;
+            //이후 null을 리턴
+            yield return null;
+        }
+        //이 오브젝트의 각도를 newRotation으로 설정
+        transform.localEulerAngles = newRotation;
+
+        //transform이 변경될때 동안 기다렸다 리턴한다.
+        yield return transform;
+    }

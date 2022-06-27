@@ -1,0 +1,958 @@
+개요
+ㄴ 컬러링 파트 전반을 담당하는 메인함수
+ㄴ 이미지 파일을 텍스쳐로 변환, 색칠, 컬러 변경, 초기화버튼 리스너 등에 대한 명령을 내림
+ㄴ 명령이 떨어지면 각 클래스들이 해당 기능을 수행하도록 함
+ㄴ ↓스크립트 내 아래의 클래스가 별도로 존재함↓
+class ColoringData
+    {
+        public Byte r;
+        public Byte g;
+        public Byte b;
+        public Byte a;
+    }
+
+=============================================================================
+
+1. 변수
+enum AppState			//어플리케이션 상태
+        {
+            COLORING,			//0
+            PAGE_PICKER_ENABLED,	//1
+            PALETTE_OPENED		//2
+        }
+
+ColorPalette(List<Color32>)		//컬러팔레트용 리스트
+rawImage(RawImage)		//텍스쳐를 넣을수 있는 이미지
+
+whiteFade(Image)			//흰 바탕의 이미지
+screenshotFade(RectTransform)	//스크린샷용 트랜스폼
+
+[아래의 함수는 읽기 전용]
+flashView = 0.45f(float)
+fadeView = 1f(float)
+fadeDissapear = 0.25f(float)		//????????????????????????????????????????????????????????
+fateDecreasementMulti = 0.8f(float)
+[ 위의 함수는 읽기 전용 ]
+fadeEllap(float)
+
+CrayonsContainerContet(Transform)	//크레용 컨테이너
+
+skecthSelector,			//스케치 셀렉터
+ColorPickerWrapper(GameObject)	//컬러피커 담기용
+
+eraserWrapper,			//지우개 담기용
+sharePalette,			//공유 담기용
+resetPopWrapper,			//리셋팝업 담기용
+popupWrapper(GameObject)		//팝업 담기용
+
+tbController(TableViewController)			//TableViewController 클래스
+ColorButtonPrefab(ColorSelectionButton)			//ColorSelectionButton 클래스
+ColoringPageButonPrefab(SelectColoringPageButton)	//SelectColoringPageButton 클래스
+MyCamera(Camera)					//카메라
+
+imageContainer(DrawableTextureContainer)		//DrawableTextureContainer 클래스
+selectedColor(Color32)	//선택한 컬러
+realColor(Color32)		//진짜 컬러
+
+doubleTap = false(bool)		//두번클릭하였는가
+paletteOpen = false(bool)		//팔레트가 켜져있는가
+eraserOpen = false(bool)		//지우개가 켜져있는가
+shareOpen = false(bool)		//공유기능이 켜져있는가
+popupOpen = false(bool)		//팝업이 켜져있는가
+
+state = AppState.COLORING(AppState)	//어플상태(초기상태는 컬러링)
+
+initialScale(float)			//스케일 정규화용 정수
+MIN_SCALE = 0.75f(const float)	//최소 스케일
+MAX_SCALE = 3.5f(const float)		//최대 스케일
+
+currentImage = ""(string)		//올바른 이미지
+picker(ColorPicker)			//컬러피커(팔레트)
+
+screenRaw(RawImage)		//화면을 텍스쳐로 넣을 수 있는 이미지
+screenCamera(Camera)		//화면용 카메라
+
+rawPositionRecord(Vector2)		//생 이미지 포지션 기록용
+rawSizeRecord(Vector2)		//생 이미지 사이즈 기록용
+rawScaleRecord(Vector3)		//생 이미지 스케일 기록용
+zoomActive(GameObject)		//줌 기능 여부
+
+=============================================================================
+
+//어플리케이션 나갈 때(=종료할 때)
+2. void OnApplicationQuit()
+        {
+            //Serialize 함수 실행 (직렬화)
+            Serialize();
+        }
+
+=============================================================================
+
+3. void Awake()
+        {
+            //picker에 colorPickerWrapper의 하위항목 중 ColorPicker을 가져와 선언
+            picker = colorPickerWrapper.GetComponentInChildren<ColorPicker>();
+
+            //selectdColor의 색깔을 노랑으로
+            selectedColor = Color.yellow;
+            //realColor의 색깔을 노랑으로
+            realColor = Color.yellow;
+            //Deserialize 함수 실행 (역직렬화)
+            Deserialize();
+
+            //selectedColor이 하양일 때
+            if (selectedColor == Color.white) //if the selected color is white, people can get confused.
+                //selectedColor의 색을 노랑으로 변경
+                selectedColor = Color.yellow;
+
+            //picker의 CurrentColor을 selectedColor로 변경
+            picker.CurrentColor = selectedColor;
+        }
+
+=============================================================================
+
+4. void Start()
+        {
+            //colorPickerWrapper을 비활성화
+            colorPickerWrapper.SetActive(false);
+            //InitDefaultColorSelector 함수 실행 
+            InitDefaultColorSelector();
+
+            //Input의 simulateMousewithTouches를 참으로
+            Input.simulateMouseWithTouches = true;
+
+            //picker의 onValueChanged의 AddListener 함수에 아래 값을 집어넣어 람다 식으로 실행
+            picker.onValueChanged.AddListener(color =>
+            {
+                SetColor(color);
+            });
+
+            //show sketchSelector first
+
+            //state를 아래와 같이 변경
+            state = AppState.PAGE_PICKER_ENABLED;
+
+        }
+
+=============================================================================
+
+5. void OnEnable()
+        {
+            //initialScale을 rawImage의 로컬스케일의 x값으로
+            initialScale = rawImage.transform.localScale.x;
+            //rawPositionRecord를 rawImage의 로컬포지션으로
+            rawPositionRecord = rawImage.transform.localPosition;
+            //rawsizeRecord를 rawImage의  렉트 트랜스폼을 가져온 것의 sizeDelta값으로
+            rawSizeRecord = rawImage.GetComponent<RectTransform>().sizeDelta;
+            //rawScaleRecord를 rawImage의 로컬스케일로
+            rawScaleRecord = rawImage.transform.localScale;
+        }
+
+=============================================================================
+
+//2개의 손가락으로 화면을 잡아 당기거나 줄일 때 그림의 크기가 줄어들었다 늘어났다 할 때 사용
+//손가락의 위치를 받아와야하기 때문에 프레임마다 호출되는 업데이트문이 적절함
+6. void Update()
+        {
+            //ESC키 클릭시 아래 함수 실행
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                OnClicHomeButton();
+            }
+
+            //eraserOpen은 eraserWrapper가 켜져있나 없나에 따라 결정
+            eraserOpen = eraserWrapper.activeSelf;
+            //shareOpen은 sharePalette가 켜져있나 없나에 따라 결정
+            shareOpen = sharePalette.activeSelf;
+            //popupOpen은 popupWrapper 또는 resetPopWrapper가 켜져있나 없나에 따라 결정
+            popupOpen = (popupWrapper.activeSelf || resetPopWrapper.activeSelf);
+
+            //if(Input.GetButtonDown("Fire1"))
+            //터치횟수가 두번일 때
+            if (Input.touchCount == 2)
+            {
+                //zoomActive가 null일 경우
+                if (zoomActive == null)
+                {
+                    //doubleTap의 값을 참으로
+                    doubleTap = true;
+
+                    //zoomActive의 값을 아래와 같이 설정
+                    zoomActive = new GameObject("sizeCanvas", typeof(RectTransform));
+                    //rect를 아래와 같이 선언
+                    RectTransform rect = zoomActive.GetComponent<RectTransform>();
+                    //rect의 위치를 rawImage의 하위 오브젝트로
+                    rect.parent = rawImage.transform.parent;
+                    //rect의 로컬스케일을 rawImage의 로컬스케일로
+                    rect.localScale = rawImage.transform.localScale;
+                    //rect의 SetSiblingIndex 함수에 0을 넣어 실행 (rect의 하이라키 순서를 0번으로)
+                    rect.SetSiblingIndex(0);
+
+                    //pos의 값을 아래의 값으로 선언
+                    Vector2 pos = (Input.touches[0].position + Input.touches[1].position) / 2;
+
+                    //Raycast를 위한 변수
+                    Ray hit = Camera.main.ScreenPointToRay(Input.mousePosition);
+                    RaycastHit hitted;
+
+                    //raycast가 UI를 쐇을 경우
+                    if (Physics.Raycast(hit, out hitted, 1000f, LayerMask.GetMask("UI")))
+                    {
+                        //rect의 로컬포지션을 hitted의 좌표로
+                        rect.localPosition = hitted.point;
+                    }
+                    //rawImage의 위치를 rect로 옮김
+                    rawImage.transform.parent = rect;
+                }
+
+                //touch1/2를 아래와 같이 선언
+                Touch touch1 = Input.GetTouch(0);
+                Touch touch2 = Input.GetTouch(1);
+
+                //이전 포지션 1/2를 아래와 같이 선언
+                Vector2 prevPos1 = touch1.position - touch1.deltaPosition;
+                Vector2 prevPos2 = touch2.position - touch2.deltaPosition;
+
+                //터치와 이전포지션을 아래와 같이 선언
+                Vector2 touch = (touch1.position + touch2.position) / 2;
+                Vector2 prevPos = (prevPos1 + prevPos2) / 2;
+
+                //거리와 이전 거리를 아래와 같이 선언
+                float distance = (touch1.position - touch2.position).magnitude;
+                float preDistance = (prevPos1 - prevPos2).magnitude;
+
+                //매그니튜드 스케일을 아래와 같이 선언
+                float magnitudeScale = distance - preDistance;
+
+                //currentScale을 아래와 같이 선언
+                float currentScale = zoomActive.transform.localScale.x;
+
+                //magnitudeScale의 값이 -5 미만일 때
+                if (magnitudeScale < -5)
+                {
+                    //currentScale + magnitudeScale * 0.0025f 값이 MIN_SCALE보다 크거나 같을때 currentScale의 값을 아래와 같이 설정
+                    if (currentScale + magnitudeScale * 0.0025f >= MIN_SCALE)
+                    {
+                        currentScale += magnitudeScale * 0.0025f;
+                    }
+                    //아닐경우 currentScale를 MIN_SCALE로
+                    else
+                    {
+                        currentScale = MIN_SCALE;
+                    }
+
+                }
+                //magnitudeScale의 값이 5를 초과했으면
+                else if (magnitudeScale > 5)
+                {
+                    //currentScale + magnitudeScale * 0.0025f 값이 MAX_SCALE보다 작거나 같을때 currentScale의 값을 아래와 같이 설정
+                    if (currentScale + magnitudeScale * 0.0025f <= MAX_SCALE)
+                    {
+                        currentScale += magnitudeScale * 0.0025f;
+                    }
+                    //아닐경우 currentScale를 MAX_SCALE로
+                    else
+                    {
+                        currentScale = MAX_SCALE;
+                    }
+                }
+                //magnitudeScale의 값이 -5이상 5이하일 때
+                else
+                {
+                    zoomActive에서 RectTransform을 가져와 그것의 offsetMin/offsetMax를 아래와 같이 설정
+                    zoomActive.GetComponent<RectTransform>().offsetMin += (touch - prevPos);
+                    zoomActive.GetComponent<RectTransform>().offsetMax += (touch - prevPos);
+                }
+
+                //aoomActive에서 RectTransform을 가져와 그 스케일을 아래와같이 설정
+                zoomActive.GetComponent<RectTransform>().localScale = new Vector3(currentScale, currentScale, 1);
+            }
+            //터치 횟수가 두번이 아닐때
+            else
+            {
+                //zoomActive가 null이 아닐 때
+                if (zoomActive != null)
+                {
+                    //rawImage의 위치를 zoomActive의 부모로 옮김
+                    rawImage.transform.parent = zoomActive.transform.parent;
+                    //rawImage의 하이라키 순서를 0번째로
+                    rawImage.transform.SetSiblingIndex(0);
+
+                    //zoomActive를 파괴
+                    Destroy(zoomActive);
+                }
+
+                //touchCount가 0일때
+                if (Input.touchCount == 0)
+                {
+                    //doubleTap를 false로 한다
+                    doubleTap = false;
+                }
+            }
+        }
+
+=============================================================================
+
+//클릭될 때 실행되는 함수
+7. void OnClickCanvas()
+        {
+            //OnClick에 클릭된 마우스의 위치를 담아 실행
+            OnClick(Input.mousePosition);
+        }
+
+=============================================================================
+
+//위의 함수에 반응하여 실행되는 함수...
+8. void OnClick(Vector3 pos)
+        {
+            //아래의 bool값중 하나라도 참이면 리턴
+            if (paletteOpen || eraserOpen || shareOpen || popupOpen || doubleTap)
+            {
+                return;
+            }
+
+            //상태가 컬러링모드일때 Click함수에 pos를 담아 실행
+            if (state == AppState.COLORING)
+                Click(pos);
+        }
+
+=============================================================================
+
+//초기 색상을 세팅하는 함수 (RGB마옐시 등)
+9. void InitDefaultColorSelector()
+        {
+            //ColorPalettedp c를 담아 반복문을 돌림
+            foreach (Color32 c in ColorPalette)
+            {
+                //obj를 아래와 같이 복사하여 선언
+                ColorSelectionButton obj = Instantiate(ColorButtonPrefab, CrayonsContainerContent, false);
+                //obj의 Init 함수에 아래의 인자를 담아 실행
+                obj.Init(this, c);
+            }
+        }
+
+=============================================================================
+
+//스크롤페이지에서 그림을 클릭했을때 작동되는 함수
+10. void InitWithNamedColorPage(string name)
+        {
+            //currentImageName를 name으로
+            currentImageName = name
+            //print("InitWithNamedColorPage currentImageName:" + currentImageName);
+
+            //savedImagePath의 값을 아래의 값으로 선언(이미지가 저장된 위치와 그 이름)
+            string savedImagePath = string.Format("{0}/drawImage/saved-{1}.png", Application.persistentDataPath, name);
+            //savedImagePath에 접근이 가능할 경우
+            if (File.Exists(savedImagePath))
+            {
+                //LoadSavedDrawing 함수에 savedImagePath를 담아 실행
+                LoadSavedDrawing(savedImagePath);
+            }
+            //접근하지 못할 경우
+            else
+            {
+                //20200206 직접로드로 변경
+                //img를 리소스에서 직접 로드하여 선언
+                Texture2D img = Resources.Load<Texture2D>(string.Format("coloring/{0}", name));
+                //imageContainer를 아래와 같이 선언
+                imageContainer = new DrawableTextureContainer(img, true, false);
+                //rawImage의 텍스쳐를 이미지컨테이너의 텍스쳐를 가져와 선언
+                rawImage.texture = imageContainer.getTexture();
+            }
+
+            //rawImage의 로컬보지션을 rawPositionRecord로
+            rawImage.transform.localPosition = rawPositionRecord;
+            //rawImage의 렉트트랜스폼의 sizeDelta를 rawSizeRecord로
+            rawImage.GetComponent<RectTransform>().sizeDelta = rawSizeRecord;
+            //rawImage의 localScale의 값을 rawScaleRecord로
+            rawImage.transform.localScale = rawScaleRecord;
+        }
+
+=============================================================================
+
+//저장하기 혹은 공유하기 버튼을 눌렀을 때 반응하여 작동되는 함수
+//isShare의 값에 따라 저장을할지 공유를 할지 판단
+11. IEnumerator Share_Save(string path, bool isShare)
+        {
+            //tex를 아래와 같이 선언
+            RenderTexture tex = new RenderTexture(rawImage.texture.width, rawImage.texture.height, 16);
+            //rawImage의 텍스쳐를 tex에 복사
+            Graphics.Blit(rawImage.texture, tex);
+            //screenRaw의 텍스쳐를 tex로
+            screenRaw.texture = tex;
+
+            //raw를 아래와 같이 선언
+            RawImage[] raws = screenCamera.GetComponentsInChildren<RawImage>();
+            //raws에 raw를 담아 반복
+            foreach (RawImage raw in raws)
+            {
+                //raw의 이름에 따라 raw의 SizeToParent 함수에 각각의 값을 넣어 세팅
+                switch (raw.name)
+                {
+                    case "TopCell":
+                        raw.SizeToParent(1f, 1f);
+                        break;
+
+                    case "BotCell":
+                        raw.SizeToParent(1.2f, 1.2f);
+                        break;
+
+                    case "MiddleCell":
+                        raw.SizeToParent(0.95f, 0.95f);
+                        break;
+                }
+            }
+
+            //screen을 아래와 같이 선언
+            RenderTexture screen = new RenderTexture(Screen.width, Screen.height, 16);
+            //screenCamera의 타겟텍스쳐를 screen으로
+            screenCamera.targetTexture = screen;
+            //screenTex를 아래와 같이 선언
+            Texture2D screenTex = new Texture2D(Screen.width, Screen.height, TextureFormat.ARGB32, false);
+            //screenCamera가 렌더를 시작
+            screenCamera.Render();
+            //renderTexture의 active는 screen으로
+            RenderTexture.active = screen;
+            //screenTex의 ReadPixels 함수에 아래와 같이 넣어 실행
+            screenTex.ReadPixels(new Rect(0, 0, Screen.width, Screen.height), 0, 0);
+            //ScreenCamera의 타겟텍스쳐를 null로
+            screenCamera.targetTexture = null;
+            //RenderTexture의 active를 null로
+            RenderTexture.active = null;
+            //screen을 없앰
+            Destroy(screen);
+            //screenByte를 아래와같이 선언
+            byte[] screenByte = screenTex.EncodeToPNG();
+
+            //isShare가 참일 경우(공유) 이미지파일인 path에 모든 바이트인 screenByte를 쓴다
+            if (isShare)
+            {
+                File.WriteAllBytes(path, screenByte);
+            }
+            //isShare가 거짓일 경우(저장) 기본 갤러리 폴더에 해당 파일을 저장한다
+            else
+            {
+                NativeGallery.SaveImageToGallery(screenByte, "TagMe", path + ".png", null);
+            }
+
+            //screenshotFade를 활성화하고 whiteFade를 활성화
+            screenshotFade.gameObject.SetActive(true);
+            whiteFade.gameObject.SetActive(true);
+
+            //fadeEllap를 아래의 값으로 변경
+            fadeEllap = fadeDissapear + fadeView;
+            //load를 아래와 같이 선언
+            Texture2D load = new Texture2D(Screen.width, Screen.height);
+            //load 테스쳐에 바이트로 된 screenByte를 불러옴
+            load.LoadImage(screenByte);
+            //screenshotFade의 Image 컴포넌트를 가져와 그 스프라이트를 아래와같이 선언해줌
+            screenshotFade.GetComponent<Image>().sprite = Sprite.Create(load, new Rect(0, 0, Screen.width, Screen.height), new Vector2(0.5f, 0.5f));
+            //screenshotFate의 컬러와 화면비율유지여부, 로컬스케일을 아래와 같이 설정
+            screenshotFade.GetComponent<Image>().color = new Color(1, 1, 1, 1);
+            screenshotFade.GetComponent<Image>().preserveAspect = true;
+            screenshotFade.localScale = Vector2.one;
+
+            //fadeEllap가 0이 아닐때
+            while (fadeEllap != 0)
+            {
+                //fadeEllap가 0을 초과할 때
+                if (fadeEllap > 0)
+                {
+                    //faedEllap의 값에 Time.deltaTime 만큼 뺀다
+                    fadeEllap -= Time.deltaTime;
+                    //fadeEllap가 fadeDissapear보다 클 경우
+                    if (fadeEllap > fadeDissapear)
+                    {
+                        //fadeView가 아래의 값 보다 클 경우 whiteFade의 컬러를 아래와 같이 선언(반투명)
+                        if (fadeView > (fadeDissapear + fadeView - flashView))
+                        {
+                            whiteFade.color = Color.Lerp(new Color(1, 1, 1, 0), new Color(1, 1, 1, 1), (fadeEllap - (fadeDissapear + fadeView - flashView)) / flashView);
+                        }
+                        //아닐 경우 whiteFade의 컬러를 아래와 같이 선언(투명)
+                        else
+                        {
+                            whiteFade.color = new Color(1, 1, 1, 0);
+                        }
+                    }
+                    //fadeEllap가 fadeDissapear보다 작거나 같을 경우
+                    else
+                    {
+                        //screenshotFade의 컬러를 아래와 같이 선언
+                        screenshotFade.GetComponent<Image>().color = Color.Lerp(new Color(1, 1, 1, 0), new Color(1, 1, 1, 1), fadeEllap / fadeDissapear);
+                        //screenshotFade의 로컬스케일을 아래와 같이 선언
+                        screenshotFade.localScale = Vector2.Lerp(new Vector2(fadeDecreasementMulti, fadeDecreasementMulti), Vector2.one, fadeEllap / fadeDissapear);
+                    }
+                }
+                //fadeEllap가 0 미만일 경우
+                else if (fadeEllap < 0)
+                {
+                    //fadeEllap의 값을 0으로
+                    fadeEllap = 0;
+                    //screenshotFade의 로컬스케일을 아래와 같이 변경
+                    screenshotFade.localScale = Vector2.one;
+                    //screenshotFade의 이미지의 컬러와 스프라이트를 각각 아래와 같이
+                    screenshotFade.GetComponent<Image>().color = new Color(1, 1, 1, 0);
+                    screenshotFade.GetComponent<Image>().sprite = null;
+                    //whiteFade의 컬러를 아래와 같이
+                    whiteFade.color = new Color(1, 1, 1, 0);
+                }
+
+                //위 작업이 끝나는 프레임까지 기다렸다 리턴
+                yield return new WaitForEndOfFrame();
+            }
+
+            //screenshotFade와 whiteFade를 비활성화
+            screenshotFade.gameObject.SetActive(false);
+            whiteFade.gameObject.SetActive(false);
+
+            //공유일때 아래의 함수를 실행
+            if (isShare)
+            {
+                new NativeShare().AddFile(path).SetTitle("Share image to...").Share();
+            }
+            //저장일때
+            else
+            {
+                //sharePalette를 비활성화, popupWrapper를 활성화
+                sharePalette.SetActive(false);
+                popupWrapper.SetActive(true);
+
+                //waitTime를 3f로 선언
+                float waitTime = 3f;
+                //float waitTimeEllap = waitTime;
+
+                //waitTime이 0을 초과할 때
+                while (waitTime > 0)
+                {
+                    waitTime에 Time.deltaTime만큼 빼고 이 작업이 끝나는 프레임까지 기다렸다 리턴
+                    waitTime -= Time.deltaTime;
+                    yield return new WaitForEndOfFrame();
+                }
+
+                //popupWrapper가 활성화 되어 있을 때 아래의 함수를 실행
+                if (popupWrapper.activeSelf)
+                {
+                    SJUtility.ShowUI(this, 0, 0.2f, popupWrapper, false);
+                }
+            }
+
+            yield return null;
+        }
+
+=============================================================================
+
+//그린 이미지를 저장하는 함수
+12. void SaveDrawing()
+        {
+            //print("SaveDrawing currentImageName: " + currentImageName);
+            //texture2D를 아래와 같이 선언
+            Texture2D texture2D = (Texture2D)rawImage.texture;
+            //savedImagePath를 아래와 같이 선언
+            string savedImagePath = string.Format("{0}/drawImage/saved-{1}.png", Application.persistentDataPath, currentImageName);
+            //savedImagePath에 texture2D를 PNG파일로 인코드 하여 저장
+            File.WriteAllBytes(savedImagePath, texture2D.EncodeToPNG());
+        }
+
+=============================================================================
+
+//저장하거나 로드할때 반응하여 작동되는 함수
+13. void LoadSavedDrawing(string filePath)
+        {
+            //fileData를 파일패스에서 읽어와 선언
+            byte[] fileData = File.ReadAllBytes(filePath);
+            //text를 아래와 같이 선언
+            Texture2D tex = new Texture2D(1024, 768, TextureFormat.RGBA4444, false);
+
+            //tex가 fildData를 넣어 이미지 로드에 성공했을 때
+            if (tex.LoadImage(fileData))
+            { //..this will auto-resize the texture dimensions.
+                //print("well loaded");
+                //rawImage의 텍스쳐를 tex로
+                rawImage.texture = tex;
+
+                //imageContiner를 DrawableTextureContainer 클래스로 선언
+                imageContainer = new DrawableTextureContainer(tex, false, false);
+                //rawImage.texture = imageContainer.getTexture ();
+
+            }
+            //tex가 fildData를 넣어 이미지 로드에 실패했을 때
+            else
+            {
+                //에러출력
+                print("error while loading the image");
+            }
+        }
+
+=============================================================================
+
+//컬러피커에서 고른 컬러를 저장하는 함수
+14. void SetColor(Color32 _color)
+        {
+            //Debug.Log ("Color changed to: " + _color);
+            selectedColor = _color;
+            picker.CurrentColor = selectedColor;
+
+            Color floatColor = selectedColor;
+
+            float realR = floatColor.r + ((1f - floatColor.r) * (1f - floatColor.a));
+            float realG = floatColor.g + ((1f - floatColor.g) * (1f - floatColor.a));
+            float realB = floatColor.b + ((1f - floatColor.b) * (1f - floatColor.a));
+
+            realColor = new Color(realR, realG, realB, 1f);
+
+            if (realColor == Color.black)
+            {
+                realColor = new Color32(1, 1, 1, 255);
+            }
+        }
+
+=============================================================================
+
+//컬러링 파트에서 클릭 시에 반응하는 함수
+15. void Click(Vector3 position)
+        {
+            //localCursor을 선언만
+            Vector2 localCursor;
+            //화면의 공간 점을 평면에 있는 RectTransform의 로컬공간위치로 변환되지 않았을 때 리턴
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rawImage.GetComponent<RectTransform>(), position, MyCamera, out localCursor))
+                return;
+            //화면의 공간 점을 평면에 있는 RectTransform의 로컬공간위치로 변환었을 때
+            else
+            {
+                localCursor의 값을 initialScale의 값으로 나눔
+                localCursor /= initialScale;
+                //localCursor의  x와 y를 각각 아래에 맞게 세팅
+                localCursor.x += imageContainer.getWidth() / 2;
+                localCursor.y += imageContainer.getHeight() / 2;
+
+                //ret는 아래와 같이 선언
+                bool ret = imageContainer.PaintBucketToolWithHistory((int)localCursor.x, (int)localCursor.y, realColor);
+
+                //rawImage의 텍스쳐는 imageContainer의 텍스쳐를 가져옴
+                rawImage.texture = imageContainer.getTexture();
+            }
+
+        }
+
+=============================================================================
+
+//리셋 버튼 리스너
+16. void OnResetPressed()
+        {
+            //eraserWrapper를 비활성화 resetPopWrapper를 활성화
+            eraserWrapper.SetActive(false);
+            resetPopWrapper.SetActive(true);
+
+            //buttons는 resetPopWrapper의 버튼들을 가져와 선언
+            Button[] buttons = resetPopWrapper.GetComponentsInChildren<Button>();
+            //buttons에 button을 담아 반복
+            foreach (Button button in buttons)
+            {
+                //button의 리스너를 모두 제거
+                button.onClick.RemoveAllListeners();
+
+                //button의 이름에 따라 케이스를 나눔
+                switch (button.name)
+                {
+                    //예 버튼의 경우 아래의 리스너를 람다 식으로 달아줌
+                    case "btn_yes":
+                        button.onClick.AddListener(() => OnResetConfirm());
+
+                        break;
+
+                    //아니요 버튼의 경우 아래의 리스너를 람다 식으로 달아줌
+                    case "btn_no":
+                        button.onClick.AddListener(() => SJUtility.ShowUI(this, 0, 0.2f, resetPopWrapper, false));
+                        break;
+                }
+            }
+        }
+
+=============================================================================
+
+//실질적으로 리셋을 하는 함수
+17. void OnResetConfirm()
+        {
+            //resetPopWrapper를 보여주지 않음
+            SJUtility.ShowUI(this, 0, 0.2f, resetPopWrapper, false);
+
+            //img는 리소스를 불러와 선언
+            Texture2D img = Resources.Load<Texture2D>(string.Format("coloring/{0}", currentImageName));
+            //imagecontainer는 새 DrawableTextureContainer로 선언
+            imageContainer = new DrawableTextureContainer(img, true, false);
+            //rawImage의 텍스쳐는 imageContainer에서 텍스쳐를 가져온다
+            rawImage.texture = imageContainer.getTexture();
+        }
+
+=============================================================================
+
+//공유하기 버튼에 반응하여 실행되는 함수
+18. void OnShare(Button button)
+        {
+            //path를 비워놓고 선언
+            string path = string.Empty;
+
+            //button의 이름에따라 기능을 나눔
+            switch (button.name)
+            {
+                //버튼이름이 저장일 경우 name를 아래와 같이 선언하여 Share_Save 함수에 name과 거짓을 넣어 코루틴으로 실행
+                case "btn_save":
+                    string name = string.Format("{0}_{1}{2:00}{3:00}_{4:00}{5:00}{6:00}", currentImageName, DateTime.Today.Year, DateTime.Today.Month, DateTime.Today.Day, DateTime.Now.Hour, DateTime.Now.Minute, DateTime.Now.Second);
+                    StartCoroutine(Share_Save(name, false));
+                    break;
+
+                //버튼이름이 공유일 경우 path를 아래와 같이 설정하여 Share_Save 함수에 path와 참을 넣어 코루틴으로 실행
+                case "btn_share":
+                    path = string.Format("{0}/drawImage/sharing-{1}.png", Application.persistentDataPath, currentImageName);
+                    StartCoroutine(Share_Save(path, true));
+                    break;
+            }
+        }
+
+=============================================================================
+
+19. void OnClickSharingButton()
+        {
+            //sharePalette가 활성화 되어있을 경우
+            if (sharePalette.activeSelf)
+            {
+                //button은 sharePalette에 달려있는 모든 버튼을 가져와 선언
+                Button[] buttons = sharePalette.GetComponentsInChildren<Button>();
+                //buttons에 button을 담아 반복
+                foreach (Button button in buttons)
+                {
+                    //모든 버튼리스너를 제거
+                    button.onClick.RemoveAllListeners();
+                }
+                //sharePalette를 보여주지 않음
+                SJUtility.ShowUI(this, 0, 0.2f, sharePalette, false);
+            }
+            //sharePalette가 활성화 되어있지 않을 경우
+            else
+            {
+                //sharePalette를 보여줌
+                SJUtility.ShowUI(this, 0, 0.2f, sharePalette, true);
+                //button은 sharePalette에 달려있는 모든 버튼을 가져와 선언
+                Button[] buttons = sharePalette.GetComponentsInChildren<Button>();
+                //buttons에 button을 담아 반복
+                foreach (Button button in buttons)
+                {
+                    //모든 버튼리스너를 제거
+                    button.onClick.RemoveAllListeners();
+                    //버튼에 버튼리스너를 아래의 함수를 람다 식으로 달아줌
+                    button.onClick.AddListener(() => OnShare(button));
+                }
+            }
+        }
+
+=============================================================================
+
+//홈버튼을 터치하였을 때 색칠하기 중이면 저장하고 홈으로 이동하게 하는 함수
+20. void OnClicHomeButton()
+        {
+            //state가 컬러링이였을 경우
+            if (state == AppState.COLORING)
+            {
+                //state를 그림 선택 창으로 돌림
+                state = AppState.PAGE_PICKER_ENABLED;
+                //SaveDrawing 함수를 실행
+                SaveDrawing();
+            }
+            //OnClicRootHomeButton 함수를 실행
+            OnClicRootHomeButton();
+        }
+
+=============================================================================
+
+//메인씬으로 넘어가는 매니저
+21. void OnClicRootHomeButton()
+        {
+            // ______________________________________________________ Go back to root scene ________________________________________________________________
+            //씬매니저를 이용하여 씬을 바꿈
+            LoadSceneManager.instance.ChangeScene(false, false);
+        }
+
+=============================================================================
+
+//팔레트 버튼 클릭시 반응하는 함수
+22. void OnClickPaletteButton()
+        {
+            //TogglePalette 함수를 실행
+            TogglePalette();
+        }
+
+=============================================================================
+
+//위 함수가 실행 되었을 때 반응하여 실질적으로 작동하는 함수
+23.void TogglePalette()
+        {
+            //paletteOpen의 값에 따라 보여주거나 보여주지 않음
+            if (paletteOpen)
+                SJUtility.ShowUI(this, 0, 0.2f, colorPickerWrapper.gameObject, false);
+            else
+                SJUtility.ShowUI(this, 0, 0.2f, colorPickerWrapper.gameObject, true);
+            //참이면 거짓으로, 거짓이면 참으로 바꿈
+            paletteOpen = !paletteOpen;
+        }
+
+=============================================================================
+
+//그림 선택창으로 이동하는 함수
+24. void OpenPagesBrowser()
+        {
+            //컬러링 모드일 때
+            if (state == AppState.COLORING)
+            {
+
+                //state의 값을 그림선택으로 하고 SaveDrawing 함수를 실행하여 그림선택창을 보여줌
+                state = AppState.PAGE_PICKER_ENABLED;
+                SaveDrawing();
+                SJUtility.ShowUI(this, 0, 0.2f, sketchSelector, true);
+
+            }
+        }
+
+=============================================================================
+
+//그림선택창에서 컬러링 모드로 이동할 때 실질적으로 사용되는 함수
+25. void ClosePagesBrowser()
+        {
+            //그림선택 모드일 때
+            if (state == AppState.PAGE_PICKER_ENABLED)
+            {
+                //state의 값을 컬러링으로 하고 그림 선택창을 보여주지 않음
+                state = AppState.COLORING;
+                SJUtility.ShowUI(this, 0, 0.2f, sketchSelector, false);
+            }
+        }
+
+=============================================================================
+
+//지우개 버튼 눌렀을 때 반응하는 함수
+26.void OnClickEraserButton()
+        {
+            //색을 흰색으로 변경
+            SetColor(Color.white);
+            //eraserWrapper을 보여줌
+            SJUtility.ShowUI(this, 0, 0.2f, eraserWrapper, true);
+            //button을 eraserWrapper의 자식 오브젝트에 버튼으로 선언
+            Button button = eraserWrapper.GetComponentInChildren<Button>();
+            //button에 람다식으로 해당 리스너를 달아줌
+            button.onClick.AddListener(() => OnResetPressed());
+        }
+
+=============================================================================
+
+//그림선택창에서 그림을 클릭했을 때 반응하는 함수
+27. void OnClickTableViewCell(string name)
+        {
+            //아래의 함수들을 실행
+            InitWithNamedColorPage(name);
+            ClosePagesBrowser();
+        }
+
+=============================================================================
+
+//앞으로가기 버튼 클릭했을때 반응하는 리스너
+28. void OnClickRedoButton()
+        {
+            //imageContainer의 Redo 함수 실행(앞으로가기)
+            imageContainer.Redo();
+            //rawImage의 텍스쳐를 imageContainer에서 텍스쳐를 가져옴
+            rawImage.texture = imageContainer.getTexture();
+        }
+
+=============================================================================
+
+//되돌리기 버튼을 클릭했을 때 반응하는 리스너
+29. void OnClickUndoButton()
+        {
+            //imageContainer의 Undo 함수 실행(되돌리기)
+            imageContainer.Undo();
+            //rawImage의 텍스쳐를 imageContainer에서 텍스쳐를 가져옴
+            rawImage.texture = imageContainer.getTexture();
+        }
+
+=============================================================================
+
+//coloring.dat를 저장하는 함수
+30. void Serialize()
+        {
+            //data를 ColoringData로 초기화
+            ColoringData data = new ColoringData();
+            //컬러값들을 선택한 컬러값으로 설정
+            data.r = selectedColor.r;
+            data.g = selectedColor.g;
+            data.b = selectedColor.b;
+            data.a = selectedColor.a;
+
+            //coloring.dat를 저장
+            FileStream fs = new FileStream(Application.persistentDataPath + "/coloring.dat", FileMode.Create);
+            //formatter를 선언
+            BinaryFormatter formatter = new BinaryFormatter();
+            try
+            {
+                //formatter를 fs와 data를 넣어 초기화
+                formatter.Serialize(fs, data);
+            }
+            //예외처리
+            catch (Exception e)
+            {
+                print("Serialize Exception:" + e.Message);
+            }
+            //끝났을때 fs를 닫음
+            finally
+            {
+                fs.Close();
+            }
+            print("coloring data serialized");
+        }
+
+=============================================================================
+
+//coloring.dat를 불러오는 함수
+31.void Deserialize()
+        {
+            //data를 null로
+            ColoringData data = null;
+
+            //path를 아래와 같이 선언
+            string path = Application.persistentDataPath + "/coloring.dat";
+            //path의 파일에 접근이 됐을 경우
+            if (File.Exists(path))
+            {
+                //로그
+                print("The file coloring.dat exists at " + path);
+                //fs를 파일 오픈 모드로 선언
+                FileStream fs = new FileStream(path, FileMode.Open);
+                try
+                {
+                    //formatter를 선언
+                    BinaryFormatter formatter = new BinaryFormatter();
+                    //data에 fs를 담음
+                    data = (ColoringData)formatter.Deserialize(fs);
+                    //selectedColor의 컬러값들을 data에서 가져옴
+                    selectedColor.r = data.r;
+                    selectedColor.g = data.g;
+                    selectedColor.b = data.b;
+                    selectedColor.a = data.a;
+
+                }
+                //예외처리
+                catch (Exception e)
+                {
+                    selectedColor = Color.yellow;  // it doesn't seem to work
+                    print("Deserialize Exception:" + e.Message);
+                }
+                //완료되면 fs를 닫음
+                finally
+                {
+                    fs.Close();
+                }
+
+            }
+            else
+            {
+                //print("no file at " + path);
+            }
+        }
